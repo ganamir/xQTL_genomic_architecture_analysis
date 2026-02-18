@@ -1,30 +1,72 @@
 # xQTL_genomic_architecture_analysis
 
 # DGRP & DSPR Processing Pipeline
-## 1. Generate Sample Files through:
+## 1. Merge samples from different Lanes <<< DGRP ONLY!! >>> Skip to step 2 for DSPR
 ````
 #!/bin/bash
 
-VCF="filtered-all.vcf.gz"
+# Simple bash script to merge lanes - no SLURM
+# Run directly with: bash merge_lanes_simple.sh
 
-# Build header from sample names
-samples=($(bcftools query -l $VCF))
-header="CHROM\tPOS"
-for s in "${samples[@]}"; do
-    header+="\tREF_${s}\tALT_${s}"
+SOURCE_DIR="/mnt/d/xQTL_2025_Data/DGRP_XQTL"
+OUTPUT_DIR="/mnt/d/xQTL_2025_Data/DGRP_XQTL/trimmed_fastqs"
+
+echo "=== Starting Lane Merge ==="
+echo "Source: $SOURCE_DIR"
+echo "Output: $OUTPUT_DIR"
+echo ""
+
+# Create output directory
+mkdir -p "$OUTPUT_DIR"
+
+# Counter
+TOTAL=0
+SUCCESS=0
+FAILED=0
+
+# Loop through all unique samples
+for L001_R1 in "$SOURCE_DIR"/2_[A-E]*_L001_R1_001.fastq.gz; do
+    
+    # Extract base name
+    BASE=$(basename "$L001_R1")
+    BASE=${BASE%%_L001_R1_001.fastq.gz}
+    
+    ((TOTAL++))
+    
+    echo "[$TOTAL] Processing: $BASE"
+    
+    # Define file paths
+    L001_R1="$SOURCE_DIR/${BASE}_L001_R1_001.fastq.gz"
+    L001_R2="$SOURCE_DIR/${BASE}_L001_R2_001.fastq.gz"
+    L002_R1="$SOURCE_DIR/${BASE}_L002_R1_001.fastq.gz"
+    L002_R2="$SOURCE_DIR/${BASE}_L002_R2_001.fastq.gz"
+    
+    # Check all files exist
+    if [[ -f "$L001_R1" && -f "$L001_R2" && -f "$L002_R1" && -f "$L002_R2" ]]; then
+        
+        # Merge R1
+        cat "$L001_R1" "$L002_R1" > "$OUTPUT_DIR/${BASE}_merged_R1_001.fastq.gz"
+        
+        # Merge R2
+        cat "$L001_R2" "$L002_R2" > "$OUTPUT_DIR/${BASE}_merged_R2_001.fastq.gz"
+        
+        echo "  ✓ Complete"
+        ((SUCCESS++))
+    else
+        echo "  ✗ ERROR: Missing files"
+        ((FAILED++))
+    fi
 done
-echo -e "$header"
 
-# Extract AD (allele depth) field: REF_count,ALT_count per sample
-bcftools query -f '%CHROM\t%POS[\t%AD]\n' $VCF | awk '{
-    printf "%s\t%s", $1, $2
-    for(i=3; i<=NF; i++) {
-        split($i, a, ",")
-        if($i == "." || a[1] == ".") printf "\t0\t0"
-        else printf "\t%s\t%s", a[1], a[2]
-    }
-    printf "\n"
-}'
+echo ""
+echo "=== Summary ==="
+echo "Total samples: $TOTAL"
+echo "Successful: $SUCCESS"
+echo "Failed: $FAILED"
+echo ""
+echo "Output location: $OUTPUT_DIR"
+ls -lh "$OUTPUT_DIR"/*_merged_*.fastq.gz 2>/dev/null | wc -l | xargs echo "Merged files created:"
+
 
 ````
 
