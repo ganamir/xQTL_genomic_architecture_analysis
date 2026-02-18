@@ -5,7 +5,6 @@
 ````
 #!/bin/bash
 
-# Simple bash script to merge lanes - no SLURM
 # Run directly with: bash merge_lanes_simple.sh
 
 SOURCE_DIR="/mnt/d/xQTL_2025_Data/DGRP_XQTL"
