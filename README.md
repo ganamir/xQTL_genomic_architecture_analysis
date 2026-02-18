@@ -91,7 +91,7 @@ done
 
 ````
 
-## 3. BWA mem merge reads
+## 3. BWA mem merge reads, sort, and output bams
 ````
 # Directory containing trimmed .gz files
 input_dir="/mnt/d/xQTL_2025_Data/Final_Window_Analysis/DGRP_xQTL/RawProcessing"
