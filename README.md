@@ -1,6 +1,6 @@
 # xQTL_genomic_architecture_analysis
 
-# DGRP
+# DGRP & DSPR Processing Pipeline
 ## 1. Generate Sample Files through:
 ````
 #!/bin/bash
