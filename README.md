@@ -181,6 +181,7 @@ for sample in A6 A7 A8 A9 A10 A11 A12 B1; do
         RGPL=illumina RGPU=D109LACXX RGLB=Lib1 \
         RGID=${rgid} RGSM=${rgsm} \
         VALIDATION_STRINGENCY=LENIENT
+    mv "${outRG}/${shortname}.RGfixed.bam" "${outRG}/A${rg_num}.bam"
     ((rg_num++))
 done
 
@@ -202,8 +203,10 @@ for sample in B2 B3 B4 B5 B6 B7 B8 B9; do
         RGPL=illumina RGPU=D109LACXX RGLB=Lib1 \
         RGID=${rgid} RGSM=${rgsm} \
         VALIDATION_STRINGENCY=LENIENT
+    mv "${outRG}/${shortname}.RGfixed.bam" "${outRG}/C${rg_num}.bam"
     ((rg_num++))
 done
+
 
 ````
 
