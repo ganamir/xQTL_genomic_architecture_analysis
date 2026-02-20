@@ -304,8 +304,8 @@ run_chrom() {
     bcf_out="${output}/calls.${mychr}.bcf"
 
     bcftools mpileup -I -d 1000 -r "$mychr" -a "FORMAT/AD,FORMAT/DP" \
-        -f "$ref" -b "$bams" --threads 10 | \
-        bcftools call -mv --threads 10 -Ob -o "$bcf_out"
+        -f "$ref" -b "$bams" --threads 12 | \
+        bcftools call -mv --threads 12 -Ob -o "$bcf_out"
 
     bcftools index "$bcf_out"
 
