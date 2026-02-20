@@ -210,9 +210,114 @@ done
 
 ````
 
-## 6. Merge Founders & Experimental Samples via mpileup
+## 6. Create sample table info with bams
 ````
+#!/bin/bash
+# Usage: bash make_bam_list.sh /path/to/output_list.txt
+
+out_list=$1
+
+if [ -z "$out_list" ]; then
+    echo "Usage: $0 <output_list.txt>"
+    exit 1
+fi
+
+# Define your two BAM directories
+dir1="/mnt/d/xQTL_2025_Data/Final_Window_Analysis/DGRP_xQTL/Spino3/RG_groups"
+dir2="/mnt/d/grenepipe/gp_analysis/rudflies_2024/dedup"
+
+> "$out_list"
+
+for bam_dir in "$dir1" "$dir2"; do
+    if [ ! -d "$bam_dir" ]; then
+        echo "Warning: directory $bam_dir does not exist, skipping."
+        continue
+    fi
+    for bam in "$bam_dir"/*.bam; do
+        [ -e "$bam" ] || continue
+        realpath "$bam" >> "$out_list"
+    done
+    echo "Added BAMs from $bam_dir"
+done
+
+echo "BAM list written to $out_list"
 ````
+
+## 7. Make Bam table:
+````
+#!/usr/bin/env bash
+# Usage: ./make_bam_table.sh output.tsv
+
+OUT_TSV=${1:-bam_list.tsv}
+
+# Define your two BAM directories
+dir1="/mnt/d/xQTL_2025_Data/Final_Window_Analysis/DGRP_xQTL/Spino3/RG_groups"
+dir2="/mnt/d/grenepipe/gp_analysis/rudflies_2024/dedup"
+
+# Header
+echo -e "sample\tbam" > "$OUT_TSV"
+
+for BAM_DIR in "$dir1" "$dir2"; do
+    if [ ! -d "$BAM_DIR" ]; then
+        echo "Warning: directory $BAM_DIR does not exist, skipping."
+        continue
+    fi
+    find "$BAM_DIR" -maxdepth 1 -type f -name "*.bam" | sort | while read -r bamfile; do
+        sample=$(basename "$bamfile" .bam)
+        echo -e "${sample}\t${bamfile}" >> "$OUT_TSV"
+    done
+    echo "Added BAMs from $BAM_DIR"
+done
+
+echo "✅ TSV file created: $OUT_TSV"
+````
+
+## 8. Combine Founders & Samples:
+````
+#!/bin/bash
+
+# Usage: bash combined_local_simple.sh bam_list.txt output_dir
+
+# Reference genome
+ref="/mnt/d/xQTL_2025_Data/ref/dm6.fa"
+
+# Inputs
+bams=$1      # file listing BAMs (one per line)
+output=$2    # output directory
+
+mkdir -p "$output"
+
+# Chromosomes
+declare -a chrs=("chrX" "chr2L" "chr2R" "chr3L" "chr3R")
+
+for mychr in "${chrs[@]}"; do
+    echo "Processing chromosome $mychr"
+
+    # BCF output
+    bcf_out="${output}/calls.${mychr}.bcf"
+
+    # Run mpileup + call
+    bcftools mpileup -I -d 1000 -t "$mychr" -a "FORMAT/AD,FORMAT/DP" -f "$ref" -b "$bams" \
+      --threads 50 | \
+      bcftools call -mv -Ob -o "$bcf_out"
+
+    # Index BCF
+    #bcftools index "$bcf_out"
+
+    # Make Ref/Alt table
+    echo -ne "CHROM\tPOS" > "${output}/RefAlt.${mychr}.txt"
+    bcftools query -l "$bcf_out" | awk '{printf("\tREF_%s\tALT_%s",$1,$1)}' >> "${output}/RefAlt.${mychr}.txt"
+    echo -ne "\n" >> "${output}/RefAlt.${mychr}.txt"
+
+    bcftools view -m2 -M2 -v snps -i 'QUAL>59' "$bcf_out" |
+      bcftools query -f '%CHROM %POS [ %AD{0} %AD{1}] [%GT]\n' |
+      grep -v '\.' | awk 'NF-=1' >> "${output}/RefAlt.${mychr}.txt"
+
+    echo "Finished chromosome $mychr"
+done
+
+````
+
 
 
 
