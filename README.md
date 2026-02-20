@@ -275,47 +275,61 @@ echo "✅ TSV file created: $OUT_TSV"
 ## 8. Combine Founders & Samples:
 ````
 #!/bin/bash
-
 # Usage: bash combined_local_simple.sh bam_list.txt output_dir
 
-# Reference genome
 ref="/mnt/d/xQTL_2025_Data/ref/dm6.fa"
-
-# Inputs
-bams=$1      # file listing BAMs (one per line)
-output=$2    # output directory
-
+bams=$1
+output=$2
 mkdir -p "$output"
 
-# Chromosomes
+# --- Check and index BAMs if needed ---
+echo "=== Checking BAM indexes ==="
+while read -r bam; do
+    if [[ ! -f "${bam}.bai" ]]; then
+        echo "Indexing: $bam"
+        samtools index "$bam"
+    else
+        echo "Already indexed: $(basename $bam)"
+    fi
+done < "$bams"
+echo "=== Indexing complete ==="
+
+# --- Run mpileup per chromosome in parallel ---
 declare -a chrs=("chrX" "chr2L" "chr2R" "chr3L" "chr3R")
 
-for mychr in "${chrs[@]}"; do
+run_chrom() {
+    mychr=$1
     echo "Processing chromosome $mychr"
 
-    # BCF output
     bcf_out="${output}/calls.${mychr}.bcf"
 
-    # Run mpileup + call
-    bcftools mpileup -I -d 1000 -t "$mychr" -a "FORMAT/AD,FORMAT/DP" -f "$ref" -b "$bams" \
-      --threads 50 | \
-      bcftools call -mv -Ob -o "$bcf_out"
+    bcftools mpileup -I -d 1000 -r "$mychr" -a "FORMAT/AD,FORMAT/DP" \
+        -f "$ref" -b "$bams" --threads 10 | \
+        bcftools call -mv --threads 10 -Ob -o "$bcf_out"
 
-    # Index BCF
-    #bcftools index "$bcf_out"
+    bcftools index "$bcf_out"
 
-    # Make Ref/Alt table
     echo -ne "CHROM\tPOS" > "${output}/RefAlt.${mychr}.txt"
     bcftools query -l "$bcf_out" | awk '{printf("\tREF_%s\tALT_%s",$1,$1)}' >> "${output}/RefAlt.${mychr}.txt"
     echo -ne "\n" >> "${output}/RefAlt.${mychr}.txt"
 
     bcftools view -m2 -M2 -v snps -i 'QUAL>59' "$bcf_out" |
-      bcftools query -f '%CHROM %POS [ %AD{0} %AD{1}] [%GT]\n' |
-      grep -v '\.' | awk 'NF-=1' >> "${output}/RefAlt.${mychr}.txt"
+        bcftools query -f '%CHROM %POS [ %AD{0} %AD{1}] [%GT]\n' |
+        grep -v '\.' | awk 'NF-=1' >> "${output}/RefAlt.${mychr}.txt"
 
     echo "Finished chromosome $mychr"
-done
+}
 
+export -f run_chrom
+export ref bams output
+
+# Run all chromosomes in parallel
+for mychr in "${chrs[@]}"; do
+    run_chrom "$mychr" &
+done
+wait
+
+echo "=== All chromosomes complete ==="
 ````
 
 
