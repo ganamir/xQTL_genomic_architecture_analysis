@@ -331,6 +331,133 @@ wait
 
 echo "=== All chromosomes complete ==="
 ````
+## 8.5. Do H cut off assessment (hierarchical clustering): <<< DGRP ONLY >>>
+````
+library(tidyverse)
+
+# --- inputs ---
+setwd("/mnt/d/xQTL_2025_Data/Final_Window_Analysis/DGRP_xQTL/Spino3/RG_groups/haplotype_inf")
+filein <- "/mnt/d/xQTL_2025_Data/Final_Window_Analysis/DGRP_xQTL/Spino3/RG_groups/haplotype_inf/RefAlt.chrX.txt"
+source("haplotype.parameters.r")  # loads founders, size, h_cutoff
+
+# --- read just what we need ---
+df <- read.table("RefAlt.chr2L.txt", header=TRUE)
+
+df2 <- df %>%
+  pivot_longer(c(-CHROM,-POS), names_to="lab", values_to="count") %>%
+  mutate(RefAlt = str_sub(lab,1,3),
+         name   = str_sub(lab,5)) %>%
+  select(-lab) %>%
+  pivot_wider(names_from=RefAlt, values_from=count) %>%
+  mutate(freq = REF/(REF+ALT), N = REF+ALT) %>%
+  select(-c("REF","ALT"))
+
+# --- pick median window ---
+mid <- median(df2$POS[df2$CHROM=="chr2L"])
+test_window <- df2 %>%
+  filter(CHROM=="chr2L" & 
+           POS > (mid - size/2) & 
+           POS < (mid + size/2) & 
+           name %in% founders) %>%
+  select(-c(CHROM,N)) %>%
+  pivot_wider(names_from=name, values_from=freq)
+
+m_test <- as.matrix(test_window %>% select(-POS))
+
+# replace NAs with 0
+m_test[is.na(m_test)] <- 0
+
+d <- dist(t(m_test))
+
+# --- diagnostics ---
+cat("Distance summary:\n")
+print(summary(as.numeric(d)))
+cat("\nCurrent h_cutoff:", h_cutoff, "\n")
+
+# test a range of cutoffs to find one that gives ~8-20 groups
+for(h in c(2.5, 5, 10, 20, 30, 40, 50)){
+  n_groups <- max(cutree(hclust(d), h=h))
+  cat("h_cutoff =", h, "->", n_groups, "groups\n")
+}
+
+for(h in seq(7.0, 9.5, by=0.1)){
+  n_groups <- max(cutree(hclust(d), h=h))
+  cat("h_cutoff =", h, "->", n_groups, "groups\n")
+}
+
+for(test_pos in c(2000000, 6000000, 10000000, 14000000, 18000000)){
+  tw <- df2 %>%
+    filter(CHROM=="chr2L" & POS > (test_pos - size/2) & POS < (test_pos + size/2) & name %in% founders) %>%
+    select(-c(CHROM,N)) %>%
+    pivot_wider(names_from=name, values_from=freq)
+  m <- as.matrix(tw %>% select(-POS))
+  m[is.na(m)] <- 0
+  d <- dist(t(m))
+  cat("pos", test_pos, "->", max(cutree(hclust(d), h=7.5)), "groups\n")
+}
+
+# visualize
+hist(as.numeric(d), breaks=100,
+     main="Pairwise founder distances in test window",
+     xlab="Euclidean distance")
+abline(v=h_cutoff, col="red", lwd=2, lty=2)
+
+````
+<img width="860" height="416" alt="image" src="https://github.com/user-attachments/assets/c3227001-80fa-4859-9f2f-35d108896eb8" />
+
+Because we have ~226 DGRP founders, we need to make sure that hierachical clustering works properly and creates a proper amount of haplotype blocks (x>1).
+
+Number of haplotypes has to stay biologically relevant, while not being overdiscriminatory (>100)
+
+## 9. Modify your input_table and haplotype.parameters files:
+haplotype.parameters
+````
+# JUICE Haplotype Parameters
+# This file defines the parameters for haplotype estimation in the JUICE dataset
+
+# Founder samples (these should match the column names in your REFALT data)
+founders <- c("196","197","198","199","200","201","202","203","204","205","206","207","208","209","210","211","212","213","214","215","216","217","218","219","220","221","222","223","224","225","226","227","228","229","230","231","232","233","234","235","236","237","238","239","240","241","242","243","244","245","246","247","248","249","250","251","252","253","254","255","256","257","258","259","260","261","262","263","264","265","266","267","268","269","270","271","272","273","274","275","276","277","278","279","280","281","282","283","284","285","286","287","288","289","290","291","292","293","294","295","296","297","298","299","300","301","302","303","304","305","306","307","308","309","310","311","312","313","314","315","316","317","318","319","320","321","322","323","324","325","326","327","328","329","330","331","332","333","334","335","336","337","338","339","340","341","342","343","344","345","346","347","348","349","350","351","352","353","354","355","356","357","358","359","360","361","362","363","364","365","366","368","369","370","371","372","373","374","375","376","377","378","379","380","381","382","383","384","385","386","387","388","389","390","391","392","393","394","395","396","397","398","399","400","401","402","404","405","406","407","408","409","410","411","412","413","414","415","416","417","418","419","420","421","422","423")
+
+# Step size for scanning positions along chromosome
+step <- 1000  # 10kb steps (increased from 5kb for speed)
+
+#try 1kb, 50kb, 100kb, 200kb
+
+#maybe 10kb
+
+# Window size - COMMENTED OUT, comes from command line
+size <- 50000  # Window size comes from command line parameter
+
+#try 100kb, 200kb, 300kb, 400kb, 500kb
+
+# Clustering parameters
+h_cutoff <- 2.5  # Default h_cutoff for fixed window hierarchical clustering
+
+# Samples to process (allows selecting subset from large REFALT files)
+names_in_bam=c("C1","C2","C3","C4","C5","C6","C7","C8","A1","A2","A3","A4","A5","A6","A7","A8")
+
+````
+
+input_table
+````
+"bam" "REP" "REPrep" "Num" "Proportion" "TRT"
+"1" "C1" 1 1 500 NA "C"
+"2" "C2" 2 1 500 NA "C"
+"3" "C3" 3 1 500 NA "C"
+"4" "C4" 4 1 500 NA "C"
+"5" "C5" 5 1 500 NA "C"
+"6" "C6" 6 1 500 NA "C"
+"7" "C7" 7 1 500 NA "C"
+"8" "C8" 8 1 500 NA "C"
+"9" "A1" 1 1 500 0.046 "Z"
+"10" "A2" 2 1 500 0.056 "Z"
+"11" "A3" 3 1 500 0.086 "Z"
+"12" "A4" 4 1 500 0.076 "Z"
+"13" "A5" 5 1 500 0.080 "Z"
+"14" "A6" 6 1 500 0.063 "Z"
+"15" "A7" 7 1 500 0.060 "Z"
+"16" "A8" 8 1 500 0.033 "Z"
+````
 
 
 
