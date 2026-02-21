@@ -471,6 +471,19 @@ REFALT2haps.Andreas.r <<< This gets piped in .sh & executed code.r
 REFALT2haps.Andreas.code.r <<< This is the statistic side of the script
 ````
 
+CONCERNS!!!!!
+
+Founders data: really low coverage ~11x which creates a multitude of problems in REFALT2haps step.
+1. Code is expecting that all founders have at least 1 read for that specific SNP. When you have 8 founders that is a non-issue, but when its 226, 99.6% of the sites get filtered out.
+
+2. Code is expecting homozygosity at every site, ALL founder samples have to be <0.03 or >0.97. Which is problematic in founder samples that are low coverage (DGRP RILs are ~11x coverage). Which leads to a lot of samples actually being non-homozygotic, i.e. somewhere between 0.03 and 0.97. Which gets filtered out
+
+3. Some sites are monomorphic between ALL founder samples (AF = 1, or AF = 0), which is bad for haplotype cluster estimation, how do you determine which haplotype it belongs to? So that get's filtered out.
+
+In the end, a ~500,000 SNP chr2L ends up with ~1621 SNPs across the entire genome post filtering.
+
+
+
 ## 11. Run haps2scan.Apr2025
 ````
 sbatch haps2scan.Apr2025.sh input_table.txt "process/" "Spino3"
