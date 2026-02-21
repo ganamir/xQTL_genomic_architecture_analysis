@@ -431,7 +431,7 @@ size <- 50000  # Window size comes from command line parameter
 #try 100kb, 200kb, 300kb, 400kb, 500kb
 
 # Clustering parameters
-h_cutoff <- 2.5  # Default h_cutoff for fixed window hierarchical clustering
+h_cutoff <- 7.5  # Default h_cutoff for fixed window hierarchical clustering , 2.5 for DSPR
 
 # Samples to process (allows selecting subset from large REFALT files)
 names_in_bam=c("C1","C2","C3","C4","C5","C6","C7","C8","A1","A2","A3","A4","A5","A6","A7","A8")
@@ -457,6 +457,31 @@ input_table
 "14" "A6" 6 1 500 0.063 "Z"
 "15" "A7" 7 1 500 0.060 "Z"
 "16" "A8" 8 1 500 0.033 "Z"
+````
+
+## 10. Run REFALT2haps.Andreas.sh
+Make sure that REFALT.chr . txt are located in the process folder
+````
+sbatch REFALT2haps.Andreas.sh haplotype.parameters.R "process/
+````
+These scripts have to be located in the same directory as the shell exectuble
+````
+REFALT2haps.Andreas.sh <<< You run this
+REFALT2haps.Andreas.r <<< This gets piped in .sh & executed code.r
+REFALT2haps.Andreas.code.r <<< This is the statistic side of the script
+````
+
+## 11. Run haps2scan.Apr2025
+````
+sbatch haps2scan.Apr2025.sh input_table.txt "process/" "Spino3"
+
+````
+These scripts have to be located in the same directroy as the shell executable
+````
+haps2scan.Apr2025.sh <<< You run this
+haps2scan.Apr2025.r <<< This gets piped in .sh & executed code.r
+haps2scan.Apr2025.code.r <<< Haplotype Inf. stats
+scan_functions.r <<< More Haplotype Inf. stats
 ````
 
 
