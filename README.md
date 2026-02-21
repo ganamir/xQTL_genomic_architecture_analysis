@@ -655,6 +655,10 @@ spots = spots %>%
   select(-NN)
 
 # this is the actual scan
+#library(furrr)
+#options(future.globals.maxSize = 8 * 1024^3)  # 8GB limit
+#plan(multisession, workers=4)
+
 total_windows <- nrow(spots)
 cat(sprintf("Starting scan: %d windows to process\n", total_windows))
 
