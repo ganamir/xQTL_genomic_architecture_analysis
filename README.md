@@ -471,7 +471,7 @@ REFALT2haps.Andreas.r <<< This gets piped in .sh & executed code.r
 REFALT2haps.Andreas.code.r <<< This is the statistic side of the script
 ````
 
-CONCERNS!!!!!
+CONCERNS!!!!! <<<< DGRP ONLY >>>>
 
 Founders data: really low coverage ~11x which creates a multitude of problems in REFALT2haps step.
 1. Code is expecting that all founders have at least 1 read for that specific SNP. When you have 8 founders that is a non-issue, but when its 226, 99.6% of the sites get filtered out.
