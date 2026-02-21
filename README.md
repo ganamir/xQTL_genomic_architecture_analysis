@@ -499,7 +499,7 @@ scan_functions.r <<< More Haplotype Inf. stats
 ````
 
 ## Modified DGRP Scripts:
-REFALT2haps.Andreas.code.r <<< Modified est_hap2 function to work with NAs in the data, and modified df2 filtering, no longer performs zero, notfixed, and informative filtering.
+REFALT2haps.Andreas.code.r <<< Modified est_hap2 function to work with NAs in the data, and modified df2 filtering, no longer performs zero, notfixed, and informative filtering. Plus added a progress bar during window analysis.
 ````
 nrow_subset = function(spotsdf, df3){
         df3 %>%
@@ -618,19 +618,20 @@ cat("df3 is now made (no SNP filtering)\n")
 
 # --- h_cutoff diagnostic: run once then comment out ---
 # pick midpoint of the chromosome's data range for the test window
-mid <- median(df3$POS[df3$CHROM == mychr])
-test_window <- df3 %>%
-  filter(CHROM == mychr & POS > (mid - size/2) & POS < (mid + size/2) & name %in% founders) %>%
-  select(-c(CHROM, N)) %>%
-  pivot_wider(names_from = name, values_from = freq)
+#mid <- median(df3$POS[df3$CHROM == mychr])
+#test_window <- df3 %>%
+#  filter(CHROM == mychr & POS > (mid - size/2) & POS < (mid + size/2) & name %in% founders) %>%
+#  select(-c(CHROM, N)) %>%
+#  pivot_wider(names_from = name, values_from = freq)
 
-m_test <- as.matrix(test_window %>% select(-POS))
-d <- dist(t(m_test))
-cat("Distance summary:\n")
-print(summary(as.numeric(d)))
-cat("Current h_cutoff:", h_cutoff, "\n")
-cat("Founders collapsed at h_cutoff:", 
-    max(cutree(hclust(d), h=h_cutoff)), "groups from", length(founders), "founders\n")
+#m_test <- as.matrix(test_window %>% select(-POS))
+#m_test[is.na(m_test)] <- 0  # ADD THIS LINE
+#d <- dist(t(m_test))
+#cat("Distance summary:\n")
+#print(summary(as.numeric(d)))
+#cat("Current h_cutoff:", h_cutoff, "\n")
+#cat("Founders collapsed at h_cutoff:", 
+#    max(cutree(hclust(d), h=h_cutoff)), "groups from", length(founders), "founders\n")
 
 # --- end diagnostic ---
 saveRDS(df3, file = rdsfile)
@@ -648,23 +649,30 @@ spots = data.frame(CHROM=rep(mychr,length(myseq)), pos=myseq, start=myseq-size, 
 # i.e., <50 SNPs in 100kb is pretty strange
 UU = unique(df3$POS)
 spots = spots %>%
-                rowwise() %>%
-                mutate(NN = sum(start < UU) - sum(end < UU)) %>%
-                filter(NN >= 50) %>%
-                select(-NN)
+  rowwise() %>%
+  mutate(NN = sum(start < UU) - sum(end < UU)) %>%
+  filter(NN >= 50) %>%
+  select(-NN)
 
 # this is the actual scan
-# I guess this could also be slow...
-# as it runs for L loci X S samples
-spots2 = spots %>%
-        group_nest(row_number()) %>%
-        mutate(out = map(data,est_hap,df3)) %>%
-		unnest(data) %>%
-        select(-c(start,end)) %>%
-        select(-`row_number()`) %>%
-        unnest_wider(out) 
+total_windows <- nrow(spots)
+cat(sprintf("Starting scan: %d windows to process\n", total_windows))
 
-saveRDS(spots2,file = fileout)
+spots2 = spots %>%
+  group_nest(row_number()) %>%
+  mutate(out = imap(data, function(x, i) {
+    if(i %% 100 == 0) cat(sprintf("Progress: %d/%d windows (%.1f%%)\n",
+                                  i, total_windows, 100*i/total_windows))
+    flush.console()
+    est_hap(x, df3)
+  })) %>%
+  unnest(data) %>%
+  select(-c(start,end)) %>%
+  select(-`row_number()`) %>%
+  unnest_wider(out)
+
+cat("Scan complete\n")
+saveRDS(spots2, file=fileout)
 
 
 ````
