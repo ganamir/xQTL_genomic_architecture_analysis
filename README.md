@@ -484,6 +484,19 @@ Founders data: really low coverage ~11x which creates a multitude of problems in
 In the end, a ~500,000 SNP chr2L ends up with ~1621 SNPs across the entire genome post filtering.
 
 
+### Late Night Solution (add filtering that imitates hafpipe)
+````
+df3 <- df2 %>%
+  mutate(freq = case_when(
+    name %in% founders & freq > 0.55 ~ 1,
+    name %in% founders & freq < 0.45 ~ 0,
+    name %in% founders & freq >= 0.45 & freq <= 0.55 ~ NA_real_,
+    TRUE ~ freq
+  )) %>%
+  filter(!(name %in% founders & is.na(freq)))
+````
+
+
 
 ## 11. Run haps2scan.Apr2025
 ````
