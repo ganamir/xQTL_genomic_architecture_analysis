@@ -459,7 +459,7 @@ input_table
 "16" "A8" 8 1 500 0.033 "Z"
 ````
 
-## 10. Run REFALT2haps.Andreas.sh
+## 10. Run REFALT2haps.Andreas.sh (for DGRP, running a modified REFALT2haps.Andreas.code.r, reference below!)
 Make sure that REFALT.chr . txt are located in the process folder
 ````
 sbatch REFALT2haps.Andreas.sh haplotype.parameters.R "process/
@@ -496,6 +496,177 @@ haps2scan.Apr2025.sh <<< You run this
 haps2scan.Apr2025.r <<< This gets piped in .sh & executed code.r
 haps2scan.Apr2025.code.r <<< Haplotype Inf. stats
 scan_functions.r <<< More Haplotype Inf. stats
+````
+
+## Modified DGRP Scripts:
+REFALT2haps.Andreas.code.r <<< Modified est_hap2 function to work with NAs in the data, and modified df2 filtering, no longer performs zero, notfixed, and informative filtering.
+````
+nrow_subset = function(spotsdf, df3){
+        df3 %>%
+                filter(CHROM==spotsdf$CHROM &
+                        POS > spotsdf$start &
+                        POS < spotsdf$end &
+                        (name %in% founders | name %in% names_in_bam)) %>%
+                nrow()
+        }
+
+
+
+
+est_hap = function(spotsdf, df3){
+        # spotsdf = spots$data[[1]]  testing
+        temp_mat = df3 %>%
+                filter(CHROM==spotsdf$CHROM &
+                        POS > spotsdf$start &
+                        POS < spotsdf$end &
+                        (name %in% founders | name %in% names_in_bam)) %>%
+                select(-c(CHROM,N)) %>%
+                pivot_wider(names_from=name, values_from=freq) %>%
+                pivot_longer(!c("POS",matches(founders)),names_to = "sample", values_to = "freq") %>%
+                select(-POS)
+
+        sample_mat = temp_mat %>%
+                group_by(sample) %>%
+                nest() %>%
+                mutate(haps=map(data,est_hap2)) %>%
+                select(-data) %>%
+                unnest_wider(haps)
+
+        sample_mat
+        }
+        
+# function for estimating the haplotype for a given sample, called from est_hap
+# returns Groups from cuttree, hap freq estimates, errors by founder
+est_hap2 = function(sampdf){
+  founder_mat = sampdf %>% select(matches(founders))
+  Y = sampdf$freq
+  
+  # Original: only filters NA in Y (pool)
+  # Fix: also filter rows where any founder is NA
+  good = !is.na(Y) & complete.cases(founder_mat)
+  
+  Y = Y[good]
+  founder_mat = founder_mat[good,] 
+  m_founder_mat = as.matrix(founder_mat)
+  
+  # Guard against empty matrix after filtering
+  if(nrow(m_founder_mat) < 10 | ncol(m_founder_mat) < 2){
+    return(list(Groups=NA, Haps=NA, Err=NA, Names=NA))
+  }
+  
+  Groups = cutree(hclust(dist(t(m_founder_mat))), h=h_cutoff)
+  d = ncol(m_founder_mat)         
+  out = lsei(A=m_founder_mat, B=Y, E=t(matrix(rep(1,d))), F=1,
+             G=diag(d), H=matrix(rep(0.0003,d)), verbose=TRUE, fulloutput=TRUE)
+  Haps = out$X
+  Err = out$cov
+  list(Groups=Groups, Haps=Haps, Err=Err, Names=names(Haps))
+}
+
+df = lazy_dt(read.table(filein,header=TRUE))
+df2 = df %>%
+	pivot_longer(c(-CHROM,-POS), names_to = "lab", values_to = "count") %>%
+	mutate(RefAlt = str_sub(lab,1,3)) %>%
+	mutate(name = str_sub(lab,5)) %>%
+	select(-lab) %>%
+#	separate(lab, c("RefAlt", "name"), "_", extra = "merge") %>%
+	pivot_wider(names_from = RefAlt, values_from = count) %>%
+	mutate(freq = REF/(REF+ALT), N = REF+ALT) %>%
+	select(-c("REF","ALT")) %>%
+	as_tibble()
+
+rm(df)
+cat("df2 is now made\n")
+
+# --- debug block ---
+#good_SNPs_debug = df2 %>%
+#  filter(name %in% founders) %>%
+#  group_by(CHROM, POS) %>%
+#  summarize(
+#    zeros       = sum(N==0),
+#    notfixed    = sum(N!=0 & freq > 0.03 & freq < 0.97),
+#    informative = (sum(freq, na.rm=TRUE) > 0.05 | sum(freq, na.rm=TRUE) < 0.95)
+#  ) %>%
+#  ungroup()
+#cat("Total SNPs before filtering:", nrow(good_SNPs_debug), "\n")
+#cat("Fail zeros==0:", sum(good_SNPs_debug$zeros > 0), "\n")
+#cat("Fail notfixed==0:", sum(good_SNPs_debug$notfixed > 0), "\n")
+#cat("Fail informative:", sum(!good_SNPs_debug$informative), "\n")
+#cat("Pass all filters:", sum(good_SNPs_debug$zeros==0 & good_SNPs_debug$notfixed==0 & good_SNPs_debug$informative), "\n")
+#rm(good_SNPs_debug)
+# --- end debug ---
+
+# identify SNPs that are NOT problematic in the set of founders
+#good_SNPs = df2 %>%
+#  filter(name %in% founders) %>%
+#  group_by(CHROM,POS) %>%
+#  summarize(
+#    zeros      = sum(N==0),
+#    notfixed   = sum(N!=0 & freq > 0.03 & freq < 0.97),
+#    informative = (sum(freq)>0.05 | sum(freq) < 0.95)
+#  ) %>%
+#  ungroup() %>%
+#  filter(zeros < 20 & notfixed < 5 & informative=="TRUE") %>%
+#  select(c(CHROM,POS))
+
+# now subset the entire dataset for the good SNPs only
+#df3 = good_SNPs %>% left_join(df2, multiple = "all")
+df3 <- df2
+
+rm(df2)  # <-- df2 deleted here, after debug block is done
+cat("df3 is now made (no SNP filtering)\n")
+
+# --- h_cutoff diagnostic: run once then comment out ---
+# pick midpoint of the chromosome's data range for the test window
+mid <- median(df3$POS[df3$CHROM == mychr])
+test_window <- df3 %>%
+  filter(CHROM == mychr & POS > (mid - size/2) & POS < (mid + size/2) & name %in% founders) %>%
+  select(-c(CHROM, N)) %>%
+  pivot_wider(names_from = name, values_from = freq)
+
+m_test <- as.matrix(test_window %>% select(-POS))
+d <- dist(t(m_test))
+cat("Distance summary:\n")
+print(summary(as.numeric(d)))
+cat("Current h_cutoff:", h_cutoff, "\n")
+cat("Founders collapsed at h_cutoff:", 
+    max(cutree(hclust(d), h=h_cutoff)), "groups from", length(founders), "founders\n")
+
+# --- end diagnostic ---
+saveRDS(df3, file = rdsfile)
+
+# df3 = readRDS(rdsfile)
+# spots are the locations at which we will estimate haplotypes
+# every <step> bp (i.e., 10kb) on the step (i.e, 0, 10, 20, ... kb)
+# I define a window +/- size on those steps, and fix the ends
+minpos = min(df3$POS)
+maxpos = max(df3$POS)
+myseq = seq(0,maxpos,step)
+myseq = myseq[myseq > minpos + size & myseq < maxpos - size]
+spots = data.frame(CHROM=rep(mychr,length(myseq)), pos=myseq, start=myseq-size, end=myseq+size)
+# get rid of windows with fewer than 50 SNPs
+# i.e., <50 SNPs in 100kb is pretty strange
+UU = unique(df3$POS)
+spots = spots %>%
+                rowwise() %>%
+                mutate(NN = sum(start < UU) - sum(end < UU)) %>%
+                filter(NN >= 50) %>%
+                select(-NN)
+
+# this is the actual scan
+# I guess this could also be slow...
+# as it runs for L loci X S samples
+spots2 = spots %>%
+        group_nest(row_number()) %>%
+        mutate(out = map(data,est_hap,df3)) %>%
+		unnest(data) %>%
+        select(-c(start,end)) %>%
+        select(-`row_number()`) %>%
+        unnest_wider(out) 
+
+saveRDS(spots2,file = fileout)
+
+
 ````
 
 
