@@ -695,5 +695,10 @@ saveRDS(spots2, file=fileout)
 ````
 
 
+## LSEI vs GLM comparison
+<img width="1442" height="783" alt="image" src="https://github.com/user-attachments/assets/23d81a36-751d-47e9-83b1-4683945d66d1" />
+
+
+
 
 
