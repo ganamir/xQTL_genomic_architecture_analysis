@@ -331,7 +331,8 @@ wait
 
 echo "=== All chromosomes complete ==="
 ````
-## 8.5. Do H cut off assessment (hierarchical clustering): <<< DGRP ONLY >>>
+
+## 8.5. Debugging code for assesing h_cutoff, and various other problems associated with selecting options, such as wald test cut_off. 
 ````
 library(tidyverse)
 library(limSolve)
@@ -537,9 +538,517 @@ for (h in c(0.5, 1.0, 1.5, 2.0)) {
 }
 
 # --- END DIAGNOSTIC ---
-````
-<img width="860" height="416" alt="image" src="https://github.com/user-attachments/assets/c3227001-80fa-4859-9f2f-35d108896eb8" />
 
+rm(df3)
+gc()
+
+# =============================================================================
+# DEFINE SCAN WINDOWS
+# =============================================================================
+
+minpos <- min(df3_wide$POS)
+maxpos <- max(df3_wide$POS)
+myseq  <- seq(0, maxpos, step)
+myseq  <- myseq[myseq > minpos + size & myseq < maxpos - size]
+
+spots <- data.frame(
+  CHROM = rep(mychr, length(myseq)),
+  pos   = myseq,
+  start = myseq - size,
+  end   = myseq + size
+)
+
+UU    <- unique(df3_wide$POS)
+spots <- spots %>%
+  rowwise() %>%
+  mutate(NN = sum(start < UU) - sum(end < UU)) %>%
+  filter(NN >= 50) %>%
+  select(-NN)
+
+cat(sprintf("Scan windows: %d\n", nrow(spots)))
+
+# =============================================================================
+# HAPLOTYPE SCAN (sequential)
+# =============================================================================
+
+total_windows <- nrow(spots)
+cat(sprintf("Starting scan: %d windows, h_cutoff = %.1f\n", total_windows, h_cutoff))
+
+t_start <- Sys.time()
+
+spots2 <- spots %>%
+  group_nest(row_number()) %>%
+  mutate(out = imap(data, function(x, i) {
+    if (i %% 100 == 0) {
+      cat(sprintf("Progress: %d/%d windows (%.1f%%)\n",
+                  i, total_windows, 100 * i / total_windows))
+      flush.console()
+    }
+    est_hap(x, df3_wide)
+  })) %>%
+  unnest(data) %>%
+  select(-c(start, end)) %>%
+  select(-`row_number()`) %>%
+  unnest_wider(out)
+
+t_end <- Sys.time()
+cat(sprintf("Scan finished in %.1f minutes\n", difftime(t_end, t_start, units = "mins")))
+
+saveRDS(spots2, file = fileout)
+cat("Output saved:", fileout, "\n")
+
+
+
+
+
+# =============================================================================
+# DEBUG HAPLOTYPEINF
+# =============================================================================
+
+chr2L <- read.table("process/Spino3/Spino3.pseudoscan.chr2R.txt")
+filt_chr2L <- na.omit(chr2L)
+
+design.df <- read.table("input_table.txt")
+
+library(tidyverse)
+library(limSolve)
+library(abind)
+
+filt_chr2L %>%
+  ggplot(aes(x = pos, y = Pseu_log10p)) + geom_point()
+
+
+
+#########
+# Functions
+#########
+
+average_variance <- function(cov_matrix, tolerance = 1e-10) {
+  n <- nrow(cov_matrix)  
+  # Calculate eigenvalues
+  eigenvalues <- eigen(cov_matrix, only.values = TRUE)$values  
+  # Filter out eigenvalues that are effectively zero or negative
+  positive_eigenvalues <- eigenvalues[eigenvalues > tolerance]  
+  # Calculate the product of positive eigenvalues
+  log_det <- sum(log(positive_eigenvalues))  
+  # Use the number of positive eigenvalues for the root
+  n_positive <- length(positive_eigenvalues)  
+  # Calculate log of average variance
+  log_avg_var <- log_det / n_positive  
+  # Convert back to original scale
+  avg_var <- exp(log_avg_var)  
+  return(list(avg_var = avg_var, n_positive = n_positive, n_total = n))
+}
+
+wald.test3 = function(p1,p2,covar1,covar2,nrepl=1,N1=NA,N2=NA){
+  
+  # Wald test for multinomial frequencies
+  # if nrepl = 1: (one replicate, analogous to chi square):
+  #  p1 and p2 are vectors of relative frequencies to be compared
+  # covar1 and covar2 are the reconstruction error 
+  # covariance matrices from limSolve
+  # the sampling covariance matrices are generated within limSolve
+  # if nrepl > 1 (multiple replicates, analogous to CMH):
+  #   p1 and p2 are matrices, each row is frequency vector for one replicate
+  # covar1 and covar2 are tensors (3-dimensional arrays, third dimension 
+  #  denotes replicate) for the linSolve covariance matrices
+  # N1 (initial) and N2 (after treatment) 
+  # are sample sizes, they are vectors when there is more than one replicate
+  # N1[i], N2[i] are then for replicate i
+  if (nrepl>1){
+    N1.eff=rep(NA,nrepl)
+    N2.eff=rep(NA,nrepl)
+    lp1 = length(p1[1,])
+    cv1=array(NA,c(lp1,lp1,nrepl))
+    cv2=array(NA,c(lp1,lp1,nrepl))
+    for (i in 1:nrepl){
+      
+      covmat1  = mn.covmat((N1[i]*p1[i,]+N2[i]*p2[i,])/(N1[i]+N2[i]),2*N1[i])
+      covmat2  = mn.covmat((N1[i]*p1[i,]+N2[i]*p2[i,])/(N1[i]+N2[i]),2*N2[i])
+      
+      N1.eff[i] = sum(diag(covmat1))*4*N1[i]^2/(sum(diag(covmat1))*2*N1[i]+2*N1[i]*sum(diag(covar1[,,i])) )
+      N2.eff[i] = sum(diag(covmat2))*4*N2[i]^2/(sum(diag(covmat2))*2*N2[i]+2*N2[i]*sum(diag(covar2[,,i])) )
+      cv1[,,i]= (covmat1 + covar1[ , ,i])  * (N1.eff[i])^2
+      cv2[,,i]= (covmat2 + covar2[ , ,i])  * (N2.eff[i])^2
+      
+    }
+    
+    p1 = N1.eff %*% p1 / sum(N1.eff)
+    p2 = N2.eff %*% p2 / sum(N2.eff)
+    
+    covar1= rowSums(cv1, dims = 2) / sum(N1.eff)^2
+    covar2= rowSums(cv2, dims = 2) / sum(N2.eff)^2
+    # browser()
+  }
+  else {
+    covmat1  = mn.covmat((N1*p1+N2*p2)/(N1+N2),2*N1)
+    covmat2  = mn.covmat((N1*p1+N2*p2)/(N1+N2),2*N2)
+    covar1 = covar1 + covmat1
+    covar2 = covar2 + covmat2
+  }
+  
+  df = length(p1)-1
+  covar=covar1+covar2
+  eg <- eigen(covar)
+  # remove last eigenvector which corresponds to eigenvalue zero
+  keep <- eg$values[1:df] > 1e-4  # threshold for meaningful eigenvalues
+  ev <- eg$vectors[,1:df][,keep]
+  eval <- eg$values[1:df][keep]
+  df <- sum(keep)  # adjust degrees of freedom
+  trafo<-diag(1/sqrt(eval)) %*% t(ev) 
+  # set extremely small values to zero
+  #new.covar[new.covar < 10^-9]=0
+  p1= as.vector(p1); p2=as.vector(p2)
+  tstat <- sum((trafo %*% (p1 - p2))^2)
+  pval<- exp(pchisq(tstat,df,lower.tail=FALSE,log.p=TRUE))
+  list(wald.test=tstat, p.value=pval, avg.var=average_variance(covar)$avg_var)
+}
+
+mn.covmat= function(p,n,min.p=0){
+  # generate multinomial covariance matrix
+  # p is vector of multinomial relative frequencies
+  # n is sample size
+  # compute covariance matrix for relative frequencies, for absolute frequencies multiply by n^2
+  # if min.p >0, then values of p smaller than min.p are set to min.p and the resulting vector is rescaled.
+  p[p<min.p] = min.p; p=p/sum(p)
+  mat = - tcrossprod(p)
+  diag(mat) = p*(1-p)
+  mat = mat/n
+  mat
+}
+
+pseudoN.test = function(p1,p2,covar1,covar2,nrepl,N1,N2){
+  pseudoN_C = rep(NA,nrepl)
+  pseudoN_Z = rep(NA,nrepl)
+  for(i in 1:nrepl){
+    pseudoN_C[i] = (2 * N1[i] * sum(p1[i,] * (1-p1[i]))) / (2 * N1[i] * sum(diag(covar1[,,i])) + sum(p1[i,] * (1-p1[i])))
+    pseudoN_Z[i] = (2 * N2[i] * sum(p2[i,] * (1-p2[i]))) / (2 * N2[i] * sum(diag(covar2[,,i])) + sum(p2[i,] * (1-p2[i])))
+  }
+  Count1 = round(p1*pseudoN_C,0)
+  Count2 = round(p2*pseudoN_Z,0)
+  lowCountFounder = apply(rbind(Count1,Count2),2,sum)
+  if(sum(lowCountFounder>=5)<2){
+    log10p = NA
+  }else{
+    Count1 = Count1[,lowCountFounder >= 5]		
+    Count2 = Count2[,lowCountFounder >= 5]		
+    if(nrepl==1){
+      out=chisq.test(rbind(Count1,Count2),correct=TRUE)
+    }else{
+      nF = ncol(Count1)
+      tdf = data.frame(Count=c(as.numeric(t(Count1)),as.numeric(t(Count2))),
+                       founder=rep(1:nF,2*nrepl),
+                       TRT = c(rep(1,nF*nrepl),rep(2,nF*nrepl)),
+                       REP = c(rep(1:nrepl,each=nF),rep(1:nrepl,each=nF)))
+      D.x = xtabs(Count ~ founder + TRT + REP, data = tdf)
+      out = mantelhaen.test(D.x,correct=TRUE)
+    }
+    log10p = -log10(out$p.value)
+  }
+  log10p
+}
+
+add_genetic = function(df){
+  df$cM = rep(NA,nrow(df))
+  fm=read.table("flymap.r6.txt",header=FALSE)
+  colnames(fm)=c("chr","pos","cM")
+  library(splines)
+  for(chrs in c("chrX","chr2L","chr2R","chr3L","chr3R")){
+    fmX = fm %>% filter(chr==chrs)
+    out = ksmooth(fmX$pos,fmX$cM,kernel="normal",bandwidth=3e6)
+    f_of_x = splinefun(out$x,out$y)
+    temp = f_of_x(df$pos[df$chr==chrs])
+    df$cM[df$chr==chrs] = temp
+  }
+  df
+}
+
+Heritability = function(p1, p2, nrepl, ProportionSelect, af_cutoff){
+  nF = ncol(p1)
+  tdf = data.frame(freq=c(as.numeric(t(p1)),as.numeric(t(p2))),
+                   founder=rep(1:nF,2*nrepl),
+                   TRT = c(rep("C",nF*nrepl),rep("Z",nF*nrepl)),
+                   REP = c(rep(1:nrepl,each=nF),rep(1:nrepl,each=nF)))
+  
+  Falconer_H2 = tdf %>%
+    pivot_wider(names_from = TRT, values_from = freq) %>%
+    mutate(mean_diff_sq = (Z-C)^2) %>%
+    mutate(mean_af_C = case_when(C <= af_cutoff ~ af_cutoff, .default = C)) %>%
+    mutate(H2temp = mean_diff_sq/mean_af_C) %>%
+    group_by(REP) %>%
+    summarize(H2temp_sum = sum(H2temp)) %>%
+    ungroup() %>%
+    left_join(ProportionSelect,by="REP") %>%
+    filter(!is.na(Proportion)) %>%
+    mutate(Falcon_i = dnorm(qnorm(1-Proportion))/Proportion) %>%
+    group_by(REP) %>%
+    summarize(H2 = 200 * H2temp_sum / Falcon_i^2) %>%
+    ungroup() %>%
+    summarize(mH2 = mean(H2)) %>%
+    pull(mH2)
+  
+  Cutler_H2 = tdf %>%
+    pivot_wider(names_from = TRT, values_from = freq) %>%
+    left_join(ProportionSelect,by="REP") %>%
+    filter(!is.na(Proportion)) %>%
+    mutate(Penetrance = (Z * Proportion)/C) %>%
+    mutate(Penetrance = case_when(Penetrance <= Proportion/2 ~ Proportion/2,
+                                  Penetrance >= 2*Proportion ~ 2*Proportion,
+                                  .default = Penetrance)) %>% 
+    mutate(Affect = qnorm(1-Proportion) - qnorm(1-Penetrance)) %>%
+    mutate(marg_Va = Affect^2 * C) %>%
+    group_by(REP) %>%
+    mutate(H2 = 200*sum(marg_Va)) %>%
+    ungroup() %>%
+    summarize(mH2 = mean(H2)) %>%
+    pull(mH2)
+  
+  list(Falconer_H2=Falconer_H2, Cutler_H2=Cutler_H2)
+}
+
+doscan = function(df,chr,Nfounders){
+  sexlink = 1
+  if(chr=="chrX"){ sexlink=0.75 }
+  
+  # I tested with xx2$data[[1]]
+  df2 = df %>%
+    unnest(cols = c(sample, Groups, Haps, Err, Names)) %>%
+    left_join(recodeTable) %>%
+    select(-sample) %>% mutate(sample=pool) %>% select(-pool) %>%
+    left_join(Numflies, join_by(sample==pool)) %>%
+    separate(sample,into=c("longTRT","REP","REPrep"),remove=FALSE) %>%
+    left_join(TreatmentMapping)
+  
+  # only analyze data for which all founders are discernable..
+  allFounders = as.numeric(df2 %>% mutate(mm = max(unlist(Groups))) %>% summarize(max(mm)))	
+  
+  ll = list(Wald_log10p = NA, Pseu_log10p = NA, Falc_H2 = NA, Cutl_H2 = NA, avg.var = NA)
+  if(allFounders!=Nfounders){ return(ll) }
+  
+  ##  now cases where all founders are OK
+  ##  now collapse any pure replicates.  This is tidy ugly.  But I feel there 
+  ##  is value in keeping dataframe columns as lists...
+  df3 = df2 %>%
+    select(-Groups) %>%
+    group_by(TRT,REP) %>%	
+    summarise(Err_mean = list(reduce(map(Err, ~as.matrix(.x)), `+`)/length(Err)),
+              Haps_mean = list(reduce(map(Haps, ~as.vector(.x)), `+`)/length(Haps)),
+              Names = list(first(Names)),
+              Num_mean = sexlink*mean(Num)) %>%
+    rename(Haps=Haps_mean,Num=Num_mean,Err=Err_mean)
+  
+  ## these summaries of the data are pretty useful for tests
+  p1 = df3 %>% filter(TRT=="C") %>% pull(Haps) %>% as.data.frame() %>% as.matrix() %>% t() 
+  row.names(p1) <- NULL
+  p2 = df3 %>% filter(TRT=="Z") %>% pull(Haps) %>% as.data.frame() %>% as.matrix() %>% t()
+  row.names(p2) <- NULL
+  covar1 = do.call(abind, c(df3 %>% filter(TRT=="C") %>% pull(Err), along = 3))
+  covar2 = do.call(abind, c(df3 %>% filter(TRT=="Z") %>% pull(Err), along = 3))
+  nrepl = df3 %>% filter(TRT=="C") %>% nrow()
+  nrepl == df3 %>% filter(TRT=="Z") %>% nrow()
+  N1 = df3 %>% filter(TRT=="C") %>% pull(Num)
+  N2 = df3 %>% filter(TRT=="Z") %>% pull(Num)
+  
+  wt = tryCatch(
+    wald.test3(p1,p2,covar1,covar2,nrepl,N1,N2),
+    error = function(e) list(wald.test=NA, p.value=NA, avg.var=NA)
+  )
+  Wald_log10p = -log10(wt$p.value)
+  Pseu_log10p = tryCatch(
+    pseudoN.test(p1,p2,covar1,covar2,nrepl,N1,N2),
+    error = function(e) NA
+  )
+  
+  af_cutoff = 0.01     # 1% --- heritability estimators can be off for really low allele frequencies
+  temp = Heritability(p1, p2, nrepl, ProportionSelect, af_cutoff)
+  Falc_H2 = temp$Falconer_H2
+  Cutl_H2 = temp$Cutler_H2
+  
+  ll = list(Wald_log10p = Wald_log10p, Pseu_log10p = Pseu_log10p,
+            Falc_H2 = Falc_H2, Cutl_H2 = Cutl_H2, avg.var = wt$avg.var)
+  ll
+}
+
+doscan2 = function(df,chr,Nfounders){
+  sexlink = 1
+  if(chr=="chrX"){ sexlink=0.75 }
+  
+  # I tested with xx2$data[[1]]
+  df2 = df %>%
+    unnest(cols = c(sample, Groups, Haps, Err, Names)) %>%
+    left_join(design.df, join_by(sample==bam)) %>%
+    filter(!is.na(TRT))
+  
+  # only analyze data for which all founders are discernable..
+  allFounders = as.numeric(df2 %>% mutate(mm = max(unlist(Groups))) %>% summarize(max(mm)))	
+  
+  ll = list(Wald_log10p = NA, Pseu_log10p = NA, Falc_H2 = NA, Cutl_H2 = NA, avg.var = NA)
+  if (is.na(allFounders) || allFounders < 2) { return(ll) }
+  
+  ##  now cases where all founders are OK
+  ##  now collapse any pure replicates.  This is tidy ugly.  But I feel there 
+  ##  is value in keeping dataframe columns as lists...
+  df3 = df2 %>%
+    select(-Groups) %>%
+    group_by(TRT,REP) %>%	
+    summarise(Err_mean = list(reduce(map(Err, ~as.matrix(.x)), `+`)/length(Err)),
+              Haps_mean = list(reduce(map(Haps, ~as.vector(.x)), `+`)/length(Haps)),
+              Names = list(first(Names)),
+              Num_mean = sexlink*mean(Num)) %>%
+    rename(Haps=Haps_mean,Num=Num_mean,Err=Err_mean)
+  
+  ## these summaries of the data are pretty useful for tests
+  p1 = df3 %>% filter(TRT=="C") %>% pull(Haps) %>% as.data.frame() %>% as.matrix() %>% t() 
+  row.names(p1) <- NULL
+  p2 = df3 %>% filter(TRT=="Z") %>% pull(Haps) %>% as.data.frame() %>% as.matrix() %>% t()
+  row.names(p2) <- NULL
+  covar1 = do.call(abind, c(df3 %>% filter(TRT=="C") %>% pull(Err), along = 3))
+  covar2 = do.call(abind, c(df3 %>% filter(TRT=="Z") %>% pull(Err), along = 3))
+  nrepl = df3 %>% filter(TRT=="C") %>% nrow()
+  nrepl == df3 %>% filter(TRT=="Z") %>% nrow()
+  N1 = df3 %>% filter(TRT=="C") %>% pull(Num)
+  N2 = df3 %>% filter(TRT=="Z") %>% pull(Num)
+  
+  wt = tryCatch(
+    wald.test3(p1,p2,covar1,covar2,nrepl,N1,N2),
+    error = function(e) list(wald.test=NA, p.value=NA, avg.var=NA)
+  )
+  Wald_log10p = -log10(wt$p.value)
+  Pseu_log10p = tryCatch(
+    pseudoN.test(p1,p2,covar1,covar2,nrepl,N1,N2),
+    error = function(e) NA
+  )
+  
+  af_cutoff = 0.01     # 1% --- heritability estimators can be off for really low allele frequencies
+  temp = Heritability(p1, p2, nrepl, ProportionSelect, af_cutoff)
+  Falc_H2 = temp$Falconer_H2
+  Cutl_H2 = temp$Cutler_H2
+  
+  ll = list(Wald_log10p = Wald_log10p, Pseu_log10p = Pseu_log10p,
+            Falc_H2 = Falc_H2, Cutl_H2 = Cutl_H2, avg.var = wt$avg.var)
+  ll
+}
+
+xx1 = readRDS("process/R.haps.chr2L.out.rds")
+Nfounders=length(xx1$Groups[[1]][[1]])
+ProportionSelect = design.df %>% filter(TRT=="Z") %>% select(REP,Proportion) %>% arrange(REP)
+
+bb1 = xx1 %>%
+  head(n=100) %>%
+  group_by(CHROM,pos) %>%
+  nest() %>%
+  mutate(out = map2(data, CHROM, doscan2, Nfounders=Nfounders)) %>%
+  unnest_wider(out)
+bb2 = bb1 %>% select(-data) %>% rename(chr=CHROM)
+bb3 = add_genetic(bb2)
+
+# ---- DIAGNOSTIC: inspect eigenvalues on a bad window ----
+if (any(bb3$Wald_log10p > 200, na.rm = TRUE)) {
+  bad_row <- bb3 %>% filter(Wald_log10p > 200) %>% slice(1)
+  bad_pos <- bad_row$pos
+  bad_chr <- bad_row$chr
+  cat("Inspecting bad window at", bad_chr, "pos =", bad_pos, "\n")
+  
+  bad_data <- xx1 %>% filter(pos == bad_pos)
+  
+  df2_bad <- bad_data %>%
+    unnest(cols = c(sample, Groups, Haps, Err, Names)) %>%
+    left_join(design.df, join_by(sample==bam)) %>%
+    filter(!is.na(TRT))
+  
+  df3_bad <- df2_bad %>%
+    select(-Groups) %>%
+    group_by(TRT,REP) %>%
+    summarise(Err_mean = list(reduce(map(Err, ~as.matrix(.x)), `+`)/length(Err)),
+              Haps_mean = list(reduce(map(Haps, ~as.vector(.x)), `+`)/length(Haps)),
+              Names = list(first(Names)),
+              Num_mean = mean(Num)) %>%
+    rename(Haps=Haps_mean, Num=Num_mean, Err=Err_mean)
+  
+  p1_bad = df3_bad %>% filter(TRT=="C") %>% pull(Haps) %>% as.data.frame() %>% as.matrix() %>% t()
+  p2_bad = df3_bad %>% filter(TRT=="Z") %>% pull(Haps) %>% as.data.frame() %>% as.matrix() %>% t()
+  N1_bad = df3_bad %>% filter(TRT=="C") %>% pull(Num)
+  N2_bad = df3_bad %>% filter(TRT=="Z") %>% pull(Num)
+  covar1_bad = do.call(abind, c(df3_bad %>% filter(TRT=="C") %>% pull(Err), along = 3))
+  covar2_bad = do.call(abind, c(df3_bad %>% filter(TRT=="Z") %>% pull(Err), along = 3))
+  nrepl_bad = df3_bad %>% filter(TRT=="C") %>% nrow()
+  
+  N1.eff = N2.eff = rep(NA, nrepl_bad)
+  lp1 = ncol(p1_bad)
+  cv1 = cv2 = array(NA, c(lp1, lp1, nrepl_bad))
+  for (i in 1:nrepl_bad) {
+    covmat1 = mn.covmat((N1_bad[i]*p1_bad[i,]+N2_bad[i]*p2_bad[i,])/(N1_bad[i]+N2_bad[i]), 2*N1_bad[i])
+    covmat2 = mn.covmat((N1_bad[i]*p1_bad[i,]+N2_bad[i]*p2_bad[i,])/(N1_bad[i]+N2_bad[i]), 2*N2_bad[i])
+    N1.eff[i] = sum(diag(covmat1))*4*N1_bad[i]^2/(sum(diag(covmat1))*2*N1_bad[i]+2*N1_bad[i]*sum(diag(covar1_bad[,,i])))
+    N2.eff[i] = sum(diag(covmat2))*4*N2_bad[i]^2/(sum(diag(covmat2))*2*N2_bad[i]+2*N2_bad[i]*sum(diag(covar2_bad[,,i])))
+    cv1[,,i] = (covmat1 + covar1_bad[,,i]) * (N1.eff[i])^2
+    cv2[,,i] = (covmat2 + covar2_bad[,,i]) * (N2.eff[i])^2
+  }
+  covar_total = rowSums(cv1, dims = 2)/sum(N1.eff)^2 + rowSums(cv2, dims = 2)/sum(N2.eff)^2
+  
+  evals = eigen(covar_total)$values
+  cat("Number of clusters:", lp1, "\n")
+  cat("All eigenvalues:\n")
+  print(signif(sort(evals, decreasing = TRUE), 4))
+  cat("\nEigenvalue range:", signif(max(evals), 4), "to", signif(min(evals), 4), "\n")
+  stop("Diagnostic done - remove this block and set proper threshold")
+} else {
+  cat("No windows with Wald_log10p > 200 found\n")
+}
+
+# Add to the diagnostic, after covar_total:
+cat("\nDiag of lsei covariance (reconstruction error):\n")
+print(signif(diag(covar1_bad[,,1]), 4))
+cat("\nDiag of multinomial covariance (sampling error):\n")
+pooled_p <- (N1_bad[1]*p1_bad[1,]+N2_bad[1]*p2_bad[1,])/(N1_bad[1]+N2_bad[1])
+print(signif(diag(mn.covmat(pooled_p, 2*N1_bad[1])), 4))
+
+
+
+cat("\nHaps for Control rep 1:\n")
+print(signif(p1_bad[1,], 4))
+cat("\nHaps for Treatment rep 1:\n")
+print(signif(p2_bad[1,], 4))
+cat("\nDifference:\n")
+print(signif(p2_bad[1,] - p1_bad[1,], 4))
+
+
+
+# Check how many windows have out-of-range proportions
+bad_count <- 0
+for (i in 1:nrow(xx1)) {
+  haps <- xx1$Haps[[i]]
+  if (!is.list(haps)) next
+  for (h in haps) {
+    if (any(!is.na(h) & (h < -0.01 | h > 1.01))) {
+      bad_count <- bad_count + 1
+      break
+    }
+  }
+}
+cat("Windows with invalid proportions:", bad_count, "out of", nrow(xx1), "\n")
+
+
+
+# I drop the loci for which the scan gives and NA
+#bb4 = bb1 %>%
+#	filter(!is.na(Pseu_log10p)) %>%
+#	select(-c(Wald_log10p, Pseu_log10p, Falc_H2, Cutl_H2, avg.var, data)) %>%
+#	left_join(xx1) %>%
+#	select(-c(Err,Groups)) %>%
+#	unnest(c(sample,Haps,Names)) %>%
+#	unnest(c(Haps,Names)) %>%
+#	rename(chr=CHROM,pool=sample,freq=Haps,founder=Names) %>%
+#	left_join(design.df, by=c("pool"="bam")) %>%
+#	select(c(chr,pos,TRT,REP,REPrep,freq,founder)) %>%
+#	filter(!is.na(TRT)) %>%
+#	group_by(chr,pos,TRT,REP,founder) %>%
+#	summarize(freq=mean(freq,na.rm=TRUE))
+
+write.table(bb3, fileout)
+#write.table(bb4, fileout_meansBySample)
+
+````
 Because we have ~226 DGRP founders, we need to make sure that hierachical clustering works properly and creates a proper amount of haplotype blocks (x>1).
 
 Number of haplotypes has to stay biologically relevant, while not being overdiscriminatory (>100)
@@ -566,7 +1075,7 @@ size <- 50000  # Window size comes from command line parameter
 #try 100kb, 200kb, 300kb, 400kb, 500kb
 
 # Clustering parameters
-h_cutoff <- 7.5  # Default h_cutoff for fixed window hierarchical clustering , 2.5 for DSPR
+h_cutoff <- 1.5  # Default h_cutoff for fixed window hierarchical clustering | 1.5 for DGRP, 2.5 for DSPR |
 
 # Samples to process (allows selecting subset from large REFALT files)
 names_in_bam=c("C1","C2","C3","C4","C5","C6","C7","C8","A1","A2","A3","A4","A5","A6","A7","A8")
@@ -619,16 +1128,225 @@ Founders data: really low coverage ~11x which creates a multitude of problems in
 In the end, a ~500,000 SNP chr2L ends up with ~1621 SNPs across the entire genome post filtering.
 
 
-### Late Night Solution (add filtering that imitates hafpipe)
+### Modified DGRP Scripts:
+REFALT2haps.Andreas.code.r
+Key modification Made:
+
+1. Binerization of Founder AF (frequencies >0.55 → 1, <0.45 → 0, ambiguous 0.45–0.55 → NA. This reflects the biological expectation that inbred lines should be homozygous.)
+
+2. Hierarchical clustering Cut off Testing & finding appropriate clustering distance (h_cutoff <- 1.5 DGRP | h_cutoff <- 2.5 DSPR)
+
+3. Added clustering of similar haplotypes (was not done in original xQTL Anthony long pipeline), now clusters are calculated and grouped via h_cutoff (lower h_cutoff means smaller cut off to define dissimilarity (Less SNP different))
+
+4. Clustering occurs before lsei runs, removes calculations errors associated with complex matrix with large number of founder samples (that are very similar to one another across the entire window)
+
 ````
+# =============================================================================
+# FUNCTIONS
+# =============================================================================
+
+# Estimate haplotype composition for all samples in a window
+# Works on pre-pivoted wide-format data (no per-window pivot_wider needed)
+est_hap <- function(spotsdf, df_wide) {
+  chunk <- df_wide %>%
+    filter(CHROM == spotsdf$CHROM &
+             POS > spotsdf$start &
+             POS < spotsdf$end)
+  
+  founder_cols <- chunk %>% select(all_of(founders))
+  pool_names   <- intersect(names_in_bam, names(chunk))
+  
+  # Cluster once using founder data only (shared across all samples)
+  f_mat <- as.matrix(founder_cols[complete.cases(founder_cols), ])
+  if (nrow(f_mat) < 10 | ncol(f_mat) < 2) {
+    return(tibble(
+      sample = pool_names,
+      Groups = list(NA), Haps = list(NA), 
+      Err = list(NA), Names = list(NA)
+    ))
+  }
+  Groups <- cutree(hclust(dist(t(f_mat))), h = h_cutoff)
+  
+  results <- lapply(pool_names, function(samp) {
+    sampdf <- data.frame(freq = chunk[[samp]], founder_cols)
+    est_hap2(sampdf, Groups)
+  })
+  
+  tibble(
+    sample = pool_names,
+    Groups = lapply(results, `[[`, "Groups"),
+    Haps   = lapply(results, `[[`, "Haps"),
+    Err    = lapply(results, `[[`, "Err"),
+    Names  = lapply(results, `[[`, "Names")
+  )
+}
+
+# Estimate haplotype proportions for a single sample via lsei
+# sampdf has columns: freq (pool), then one column per founder
+est_hap2 <- function(sampdf, Groups) {
+  founder_mat   <- sampdf %>% select(-freq)
+  Y             <- sampdf$freq
+  
+  good          <- !is.na(Y) & complete.cases(founder_mat)
+  Y             <- Y[good]
+  founder_mat   <- founder_mat[good, ]
+  m_founder_mat <- as.matrix(founder_mat)
+  
+  if (nrow(m_founder_mat) < 10 | ncol(m_founder_mat) < 2) {
+    return(list(Groups = NA, Haps = NA, Err = NA, Names = NA))
+  }
+  
+  # Collapse founder matrix into cluster-level matrix BEFORE lsei
+  unique_groups <- sort(unique(Groups))
+  n_groups      <- length(unique_groups)
+  
+  cluster_mat <- sapply(unique_groups, function(cl) {
+    members <- which(Groups == cl)
+    if (length(members) == 1) {
+      m_founder_mat[, members]
+    } else {
+      rowMeans(m_founder_mat[, members])
+    }
+  })
+  
+  d <- ncol(cluster_mat)
+  
+  if (d < 2) {
+    return(list(Groups = NA, Haps = NA, Err = NA, Names = NA))
+  }
+  
+  out <- lsei(
+    A = cluster_mat, B = Y,
+    E = t(matrix(rep(1, d))), F = 1,
+    G = diag(d), H = matrix(rep(0.0003, d)),
+    verbose = FALSE, fulloutput = TRUE
+  )
+  
+  group_names <- paste0("G", unique_groups)
+  names(out$X) <- group_names
+  
+  list(
+    Groups = Groups,
+    Haps   = out$X,
+    Err    = out$cov,
+    Names  = group_names
+  )
+}
+
+# =============================================================================
+# DATA LOADING
+# =============================================================================
+
+cat("Loading RefAlt file...\n")
+
+df <- lazy_dt(read.table(filein, header = TRUE))
+
+df2 <- df %>%
+  pivot_longer(c(-CHROM, -POS), names_to = "lab", values_to = "count") %>%
+  mutate(RefAlt = str_sub(lab, 1, 3),
+         name   = str_sub(lab, 5)) %>%
+  select(-lab) %>%
+  pivot_wider(names_from = RefAlt, values_from = count) %>%
+  mutate(freq = REF / (REF + ALT),
+         N    = REF + ALT) %>%
+  select(-c("REF", "ALT")) %>%
+  as_tibble()
+
+rm(df)
+cat("df2 loaded:", nrow(df2), "rows\n")
+
+# =============================================================================
+# FOUNDER FREQUENCY ROUNDING
+# =============================================================================
+
 df3 <- df2 %>%
   mutate(freq = case_when(
-    name %in% founders & freq > 0.55 ~ 1,
-    name %in% founders & freq < 0.45 ~ 0,
+    name %in% founders & freq >  0.55 ~  1,
+    name %in% founders & freq <  0.45 ~  0,
     name %in% founders & freq >= 0.45 & freq <= 0.55 ~ NA_real_,
     TRUE ~ freq
   )) %>%
   filter(!(name %in% founders & is.na(freq)))
+
+rm(df2)
+cat("df3 after founder rounding:", nrow(df3), "rows\n")
+
+# =============================================================================
+# SAVE PROCESSED DATA (long format, for downstream use)
+# =============================================================================
+
+saveRDS(df3, file = rdsfile)
+
+# =============================================================================
+# PIVOT TO WIDE FORMAT ONCE
+# =============================================================================
+
+cat("Pivoting to wide format (one-time operation)...\n")
+
+df3_wide <- df3 %>%
+  select(-N) %>%
+  pivot_wider(names_from = name, values_from = freq)
+
+cat("df3_wide:", nrow(df3_wide), "rows x", ncol(df3_wide), "cols\n")
+
+rm(df3)
+gc()
+
+# =============================================================================
+# DEFINE SCAN WINDOWS
+# =============================================================================
+
+minpos <- min(df3_wide$POS)
+maxpos <- max(df3_wide$POS)
+myseq  <- seq(0, maxpos, step)
+myseq  <- myseq[myseq > minpos + size & myseq < maxpos - size]
+
+spots <- data.frame(
+  CHROM = rep(mychr, length(myseq)),
+  pos   = myseq,
+  start = myseq - size,
+  end   = myseq + size
+)
+
+UU    <- unique(df3_wide$POS)
+spots <- spots %>%
+  rowwise() %>%
+  mutate(NN = sum(start < UU) - sum(end < UU)) %>%
+  filter(NN >= 50) %>%
+  select(-NN)
+
+cat(sprintf("Scan windows: %d\n", nrow(spots)))
+
+# =============================================================================
+# HAPLOTYPE SCAN (sequential)
+# =============================================================================
+
+total_windows <- nrow(spots)
+cat(sprintf("Starting scan: %d windows, h_cutoff = %.1f\n", total_windows, h_cutoff))
+
+t_start <- Sys.time()
+
+spots2 <- spots %>%
+  group_nest(row_number()) %>%
+  mutate(out = imap(data, function(x, i) {
+    if (i %% 100 == 0) {
+      cat(sprintf("Progress: %d/%d windows (%.1f%%)\n",
+                  i, total_windows, 100 * i / total_windows))
+      flush.console()
+    }
+    est_hap(x, df3_wide)
+  })) %>%
+  unnest(data) %>%
+  select(-c(start, end)) %>%
+  select(-`row_number()`) %>%
+  unnest_wider(out)
+
+t_end <- Sys.time()
+cat(sprintf("Scan finished in %.1f minutes\n", difftime(t_end, t_start, units = "mins")))
+
+saveRDS(spots2, file = fileout)
+cat("Output saved:", fileout, "\n")
+
 ````
 
 
@@ -646,189 +1364,366 @@ haps2scan.Apr2025.code.r <<< Haplotype Inf. stats
 scan_functions.r <<< More Haplotype Inf. stats
 ````
 
-## Modified DGRP Scripts:
-REFALT2haps.Andreas.code.r <<< Modified est_hap2 function to work with NAs in the data, and modified df2 filtering, no longer performs zero, notfixed, and informative filtering. Plus added a progress bar during window analysis.
+### Modified DGRP Scripts:
+haps2scan.Apr2025.code
+Key modification Made:
+
+1. doscan2 works with NAs that are introduced in complex matrix calculations
+
+2. Commented out founder contribution dataset. Due to clustering of haplotypes, we no longer are able to identify which founder set contributed to the window, which is fine for DGRP data.
 ````
-nrow_subset = function(spotsdf, df3){
-        df3 %>%
-                filter(CHROM==spotsdf$CHROM &
-                        POS > spotsdf$start &
-                        POS < spotsdf$end &
-                        (name %in% founders | name %in% names_in_bam)) %>%
-                nrow()
-        }
-
-
-
-
-est_hap = function(spotsdf, df3){
-        # spotsdf = spots$data[[1]]  testing
-        temp_mat = df3 %>%
-                filter(CHROM==spotsdf$CHROM &
-                        POS > spotsdf$start &
-                        POS < spotsdf$end &
-                        (name %in% founders | name %in% names_in_bam)) %>%
-                select(-c(CHROM,N)) %>%
-                pivot_wider(names_from=name, values_from=freq) %>%
-                pivot_longer(!c("POS",matches(founders)),names_to = "sample", values_to = "freq") %>%
-                select(-POS)
-
-        sample_mat = temp_mat %>%
-                group_by(sample) %>%
-                nest() %>%
-                mutate(haps=map(data,est_hap2)) %>%
-                select(-data) %>%
-                unnest_wider(haps)
-
-        sample_mat
-        }
-        
-# function for estimating the haplotype for a given sample, called from est_hap
-# returns Groups from cuttree, hap freq estimates, errors by founder
-est_hap2 = function(sampdf){
-  founder_mat = sampdf %>% select(matches(founders))
-  Y = sampdf$freq
+doscan2 = function(df,chr,Nfounders){
+  sexlink = 1
+  if(chr=="chrX"){ sexlink=0.75 }
   
-  # Original: only filters NA in Y (pool)
-  # Fix: also filter rows where any founder is NA
-  good = !is.na(Y) & complete.cases(founder_mat)
+  # I tested with xx2$data[[1]]
+  df2 = df %>%
+    unnest(cols = c(sample, Groups, Haps, Err, Names)) %>%
+    left_join(design.df, join_by(sample==bam)) %>%
+    filter(!is.na(TRT))
   
-  Y = Y[good]
-  founder_mat = founder_mat[good,] 
-  m_founder_mat = as.matrix(founder_mat)
+  # only analyze data for which all founders are discernable..
+  allFounders = as.numeric(df2 %>% mutate(mm = max(unlist(Groups))) %>% summarize(max(mm)))	
   
-  # Guard against empty matrix after filtering
-  if(nrow(m_founder_mat) < 10 | ncol(m_founder_mat) < 2){
-    return(list(Groups=NA, Haps=NA, Err=NA, Names=NA))
-  }
+  ll = list(Wald_log10p = NA, Pseu_log10p = NA, Falc_H2 = NA, Cutl_H2 = NA, avg.var = NA)
+  if (is.na(allFounders) || allFounders < 2) { return(ll) }
   
-  Groups = cutree(hclust(dist(t(m_founder_mat))), h=h_cutoff)
-  d = ncol(m_founder_mat)         
-  out = lsei(A=m_founder_mat, B=Y, E=t(matrix(rep(1,d))), F=1,
-             G=diag(d), H=matrix(rep(0.0003,d)), verbose=TRUE, fulloutput=TRUE)
-  Haps = out$X
-  Err = out$cov
-  list(Groups=Groups, Haps=Haps, Err=Err, Names=names(Haps))
+  ##  now cases where all founders are OK
+  ##  now collapse any pure replicates.  This is tidy ugly.  But I feel there 
+  ##  is value in keeping dataframe columns as lists...
+  df3 = df2 %>%
+    select(-Groups) %>%
+    group_by(TRT,REP) %>%	
+    summarise(Err_mean = list(reduce(map(Err, ~as.matrix(.x)), `+`)/length(Err)),
+              Haps_mean = list(reduce(map(Haps, ~as.vector(.x)), `+`)/length(Haps)),
+              Names = list(first(Names)),
+              Num_mean = sexlink*mean(Num)) %>%
+    rename(Haps=Haps_mean,Num=Num_mean,Err=Err_mean)
+  
+  ## these summaries of the data are pretty useful for tests
+  p1 = df3 %>% filter(TRT=="C") %>% pull(Haps) %>% as.data.frame() %>% as.matrix() %>% t() 
+  row.names(p1) <- NULL
+  p2 = df3 %>% filter(TRT=="Z") %>% pull(Haps) %>% as.data.frame() %>% as.matrix() %>% t()
+  row.names(p2) <- NULL
+  covar1 = do.call(abind, c(df3 %>% filter(TRT=="C") %>% pull(Err), along = 3))
+  covar2 = do.call(abind, c(df3 %>% filter(TRT=="Z") %>% pull(Err), along = 3))
+  nrepl = df3 %>% filter(TRT=="C") %>% nrow()
+  nrepl == df3 %>% filter(TRT=="Z") %>% nrow()
+  N1 = df3 %>% filter(TRT=="C") %>% pull(Num)
+  N2 = df3 %>% filter(TRT=="Z") %>% pull(Num)
+  
+  wt = tryCatch(
+    wald.test3(p1,p2,covar1,covar2,nrepl,N1,N2),
+    error = function(e) list(wald.test=NA, p.value=NA, avg.var=NA)
+  )
+  Wald_log10p = -log10(wt$p.value)
+  Pseu_log10p = tryCatch(
+    pseudoN.test(p1,p2,covar1,covar2,nrepl,N1,N2),
+    error = function(e) NA
+  )
+  
+  af_cutoff = 0.01     # 1% --- heritability estimators can be off for really low allele frequencies
+  temp = Heritability(p1, p2, nrepl, ProportionSelect, af_cutoff)
+  Falc_H2 = temp$Falconer_H2
+  Cutl_H2 = temp$Cutler_H2
+  
+  ll = list(Wald_log10p = Wald_log10p, Pseu_log10p = Pseu_log10p,
+            Falc_H2 = Falc_H2, Cutl_H2 = Cutl_H2, avg.var = wt$avg.var)
+  ll
 }
 
-df = lazy_dt(read.table(filein,header=TRUE))
-df2 = df %>%
-	pivot_longer(c(-CHROM,-POS), names_to = "lab", values_to = "count") %>%
-	mutate(RefAlt = str_sub(lab,1,3)) %>%
-	mutate(name = str_sub(lab,5)) %>%
-	select(-lab) %>%
-#	separate(lab, c("RefAlt", "name"), "_", extra = "merge") %>%
-	pivot_wider(names_from = RefAlt, values_from = count) %>%
-	mutate(freq = REF/(REF+ALT), N = REF+ALT) %>%
-	select(-c("REF","ALT")) %>%
-	as_tibble()
+xx1 = readRDS(filein)
+Nfounders=length(xx1$Groups[[1]][[1]])
+ProportionSelect = design.df %>% filter(TRT=="Z") %>% select(REP,Proportion) %>% arrange(REP)
 
-rm(df)
-cat("df2 is now made\n")
+bb1 = xx1 %>%
+#	head(n=100) %>%
+	group_by(CHROM,pos) %>%
+	nest() %>%
+	mutate(out = map2(data, CHROM, doscan2, Nfounders=Nfounders)) %>%
+	unnest_wider(out)
+bb2 = bb1 %>% select(-data) %>% rename(chr=CHROM)
+bb3 = add_genetic(bb2)
 
-# --- debug block ---
-#good_SNPs_debug = df2 %>%
-#  filter(name %in% founders) %>%
-#  group_by(CHROM, POS) %>%
-#  summarize(
-#    zeros       = sum(N==0),
-#    notfixed    = sum(N!=0 & freq > 0.03 & freq < 0.97),
-#    informative = (sum(freq, na.rm=TRUE) > 0.05 | sum(freq, na.rm=TRUE) < 0.95)
-#  ) %>%
-#  ungroup()
-#cat("Total SNPs before filtering:", nrow(good_SNPs_debug), "\n")
-#cat("Fail zeros==0:", sum(good_SNPs_debug$zeros > 0), "\n")
-#cat("Fail notfixed==0:", sum(good_SNPs_debug$notfixed > 0), "\n")
-#cat("Fail informative:", sum(!good_SNPs_debug$informative), "\n")
-#cat("Pass all filters:", sum(good_SNPs_debug$zeros==0 & good_SNPs_debug$notfixed==0 & good_SNPs_debug$informative), "\n")
-#rm(good_SNPs_debug)
-# --- end debug ---
+# I drop the loci for which the scan gives and NA
+#bb4 = bb1 %>%
+#	filter(!is.na(Pseu_log10p)) %>%
+#	select(-c(Wald_log10p, Pseu_log10p, Falc_H2, Cutl_H2, avg.var, data)) %>%
+#	left_join(xx1) %>%
+#	select(-c(Err,Groups)) %>%
+#	unnest(c(sample,Haps,Names)) %>%
+#	unnest(c(Haps,Names)) %>%
+#	rename(chr=CHROM,pool=sample,freq=Haps,founder=Names) %>%
+#	left_join(design.df, by=c("pool"="bam")) %>%
+#	select(c(chr,pos,TRT,REP,REPrep,freq,founder)) %>%
+#	filter(!is.na(TRT)) %>%
+#	group_by(chr,pos,TRT,REP,founder) %>%
+#	summarize(freq=mean(freq,na.rm=TRUE))
 
-# identify SNPs that are NOT problematic in the set of founders
-#good_SNPs = df2 %>%
-#  filter(name %in% founders) %>%
-#  group_by(CHROM,POS) %>%
-#  summarize(
-#    zeros      = sum(N==0),
-#    notfixed   = sum(N!=0 & freq > 0.03 & freq < 0.97),
-#    informative = (sum(freq)>0.05 | sum(freq) < 0.95)
-#  ) %>%
-#  ungroup() %>%
-#  filter(zeros < 20 & notfixed < 5 & informative=="TRUE") %>%
-#  select(c(CHROM,POS))
-
-# now subset the entire dataset for the good SNPs only
-#df3 = good_SNPs %>% left_join(df2, multiple = "all")
-df3 <- df2
-
-rm(df2)  # <-- df2 deleted here, after debug block is done
-cat("df3 is now made (no SNP filtering)\n")
-
-# --- h_cutoff diagnostic: run once then comment out ---
-# pick midpoint of the chromosome's data range for the test window
-#mid <- median(df3$POS[df3$CHROM == mychr])
-#test_window <- df3 %>%
-#  filter(CHROM == mychr & POS > (mid - size/2) & POS < (mid + size/2) & name %in% founders) %>%
-#  select(-c(CHROM, N)) %>%
-#  pivot_wider(names_from = name, values_from = freq)
-
-#m_test <- as.matrix(test_window %>% select(-POS))
-#m_test[is.na(m_test)] <- 0  # ADD THIS LINE
-#d <- dist(t(m_test))
-#cat("Distance summary:\n")
-#print(summary(as.numeric(d)))
-#cat("Current h_cutoff:", h_cutoff, "\n")
-#cat("Founders collapsed at h_cutoff:", 
-#    max(cutree(hclust(d), h=h_cutoff)), "groups from", length(founders), "founders\n")
-
-# --- end diagnostic ---
-saveRDS(df3, file = rdsfile)
-
-# df3 = readRDS(rdsfile)
-# spots are the locations at which we will estimate haplotypes
-# every <step> bp (i.e., 10kb) on the step (i.e, 0, 10, 20, ... kb)
-# I define a window +/- size on those steps, and fix the ends
-minpos = min(df3$POS)
-maxpos = max(df3$POS)
-myseq = seq(0,maxpos,step)
-myseq = myseq[myseq > minpos + size & myseq < maxpos - size]
-spots = data.frame(CHROM=rep(mychr,length(myseq)), pos=myseq, start=myseq-size, end=myseq+size)
-# get rid of windows with fewer than 50 SNPs
-# i.e., <50 SNPs in 100kb is pretty strange
-UU = unique(df3$POS)
-spots = spots %>%
-  rowwise() %>%
-  mutate(NN = sum(start < UU) - sum(end < UU)) %>%
-  filter(NN >= 50) %>%
-  select(-NN)
-
-# this is the actual scan
-#library(furrr)
-#options(future.globals.maxSize = 8 * 1024^3)  # 8GB limit
-#plan(multisession, workers=4)
-
-total_windows <- nrow(spots)
-cat(sprintf("Starting scan: %d windows to process\n", total_windows))
-
-spots2 = spots %>%
-  group_nest(row_number()) %>%
-  mutate(out = imap(data, function(x, i) {
-    if(i %% 100 == 0) cat(sprintf("Progress: %d/%d windows (%.1f%%)\n",
-                                  i, total_windows, 100*i/total_windows))
-    flush.console()
-    est_hap(x, df3)
-  })) %>%
-  unnest(data) %>%
-  select(-c(start,end)) %>%
-  select(-`row_number()`) %>%
-  unnest_wider(out)
-
-cat("Scan complete\n")
-saveRDS(spots2, file=fileout)
+write.table(bb3, fileout)
+#write.table(bb4, fileout_meansBySample)
 
 
 ````
+### Modified DGRP Scripts:
+haps2scan.Apr2025.code
+Key modification Made:
 
+1. Wald.test3 now has eigenvalue filtering, with many founders being so similar to one another, haplotype contributions coming from all of them are small, therefore we filter values that are smaller than e-4. (Helps to minimize NAs calculated from overly complex matrix & removes uneeded data that wouldn't have helped with inferences. Some signal might be lost, but without filtering, no signal would even be generated.)
+
+````
+#########
+# Functions
+#########
+
+average_variance <- function(cov_matrix, tolerance = 1e-10) {
+  n <- nrow(cov_matrix)  
+  # Calculate eigenvalues
+  eigenvalues <- eigen(cov_matrix, only.values = TRUE)$values  
+  # Filter out eigenvalues that are effectively zero or negative
+  positive_eigenvalues <- eigenvalues[eigenvalues > tolerance]  
+  # Calculate the product of positive eigenvalues
+  log_det <- sum(log(positive_eigenvalues))  
+  # Use the number of positive eigenvalues for the root
+  n_positive <- length(positive_eigenvalues)  
+  # Calculate log of average variance
+  log_avg_var <- log_det / n_positive  
+  # Convert back to original scale
+  avg_var <- exp(log_avg_var)  
+  return(list(avg_var = avg_var, n_positive = n_positive, n_total = n))
+}
+
+wald.test3 = function(p1,p2,covar1,covar2,nrepl=1,N1=NA,N2=NA){
+    
+    # Wald test for multinomial frequencies
+    # if nrepl = 1: (one replicate, analogous to chi square):
+    #  p1 and p2 are vectors of relative frequencies to be compared
+    # covar1 and covar2 are the reconstruction error 
+    # covariance matrices from limSolve
+    # the sampling covariance matrices are generated within limSolve
+    # if nrepl > 1 (multiple replicates, analogous to CMH):
+    #   p1 and p2 are matrices, each row is frequency vector for one replicate
+    # covar1 and covar2 are tensors (3-dimensional arrays, third dimension 
+    #  denotes replicate) for the linSolve covariance matrices
+    # N1 (initial) and N2 (after treatment) 
+    # are sample sizes, they are vectors when there is more than one replicate
+    # N1[i], N2[i] are then for replicate i
+    if (nrepl>1){
+      N1.eff=rep(NA,nrepl)
+      N2.eff=rep(NA,nrepl)
+      lp1 = length(p1[1,])
+      cv1=array(NA,c(lp1,lp1,nrepl))
+      cv2=array(NA,c(lp1,lp1,nrepl))
+      for (i in 1:nrepl){
+          
+        covmat1  = mn.covmat((N1[i]*p1[i,]+N2[i]*p2[i,])/(N1[i]+N2[i]),2*N1[i])
+        covmat2  = mn.covmat((N1[i]*p1[i,]+N2[i]*p2[i,])/(N1[i]+N2[i]),2*N2[i])
+    
+        N1.eff[i] = sum(diag(covmat1))*4*N1[i]^2/(sum(diag(covmat1))*2*N1[i]+2*N1[i]*sum(diag(covar1[,,i])) )
+        N2.eff[i] = sum(diag(covmat2))*4*N2[i]^2/(sum(diag(covmat2))*2*N2[i]+2*N2[i]*sum(diag(covar2[,,i])) )
+        cv1[,,i]= (covmat1 + covar1[ , ,i])  * (N1.eff[i])^2
+        cv2[,,i]= (covmat2 + covar2[ , ,i])  * (N2.eff[i])^2
+        
+      }
+        
+      p1 = N1.eff %*% p1 / sum(N1.eff)
+      p2 = N2.eff %*% p2 / sum(N2.eff)
+     
+      covar1= rowSums(cv1, dims = 2) / sum(N1.eff)^2
+      covar2= rowSums(cv2, dims = 2) / sum(N2.eff)^2
+     # browser()
+    }
+    else {
+      covmat1  = mn.covmat((N1*p1+N2*p2)/(N1+N2),2*N1)
+      covmat2  = mn.covmat((N1*p1+N2*p2)/(N1+N2),2*N2)
+      covar1 = covar1 + covmat1
+      covar2 = covar2 + covmat2
+    }
+  
+  df = length(p1)-1
+  covar=covar1+covar2
+  eg <- eigen(covar)
+  # remove last eigenvector which corresponds to eigenvalue zero
+  keep <- eg$values[1:df] > 1e-4  # threshold for meaningful eigenvalues
+  ev <- eg$vectors[,1:df][,keep]
+  eval <- eg$values[1:df][keep]
+  df <- sum(keep)  # adjust degrees of freedom
+  trafo<-diag(1/sqrt(eval)) %*% t(ev) 
+  # set extremely small values to zero
+  #new.covar[new.covar < 10^-9]=0
+  p1= as.vector(p1); p2=as.vector(p2)
+  tstat <- sum((trafo %*% (p1 - p2))^2)
+  pval<- exp(pchisq(tstat,df,lower.tail=FALSE,log.p=TRUE))
+  list(wald.test=tstat, p.value=pval, avg.var=average_variance(covar)$avg_var)
+}
+
+mn.covmat= function(p,n,min.p=0){
+  # generate multinomial covariance matrix
+  # p is vector of multinomial relative frequencies
+  # n is sample size
+  # compute covariance matrix for relative frequencies, for absolute frequencies multiply by n^2
+  # if min.p >0, then values of p smaller than min.p are set to min.p and the resulting vector is rescaled.
+  p[p<min.p] = min.p; p=p/sum(p)
+  mat = - tcrossprod(p)
+  diag(mat) = p*(1-p)
+  mat = mat/n
+  mat
+}
+    
+pseudoN.test = function(p1,p2,covar1,covar2,nrepl,N1,N2){
+	pseudoN_C = rep(NA,nrepl)
+	pseudoN_Z = rep(NA,nrepl)
+	for(i in 1:nrepl){
+		pseudoN_C[i] = (2 * N1[i] * sum(p1[i,] * (1-p1[i]))) / (2 * N1[i] * sum(diag(covar1[,,i])) + sum(p1[i,] * (1-p1[i])))
+		pseudoN_Z[i] = (2 * N2[i] * sum(p2[i,] * (1-p2[i]))) / (2 * N2[i] * sum(diag(covar2[,,i])) + sum(p2[i,] * (1-p2[i])))
+		}
+	Count1 = round(p1*pseudoN_C,0)
+	Count2 = round(p2*pseudoN_Z,0)
+	lowCountFounder = apply(rbind(Count1,Count2),2,sum)
+	if(sum(lowCountFounder>=5)<2){
+		log10p = NA
+		}else{
+		Count1 = Count1[,lowCountFounder >= 5]		
+		Count2 = Count2[,lowCountFounder >= 5]		
+		if(nrepl==1){
+			out=chisq.test(rbind(Count1,Count2),correct=TRUE)
+			}else{
+			nF = ncol(Count1)
+			tdf = data.frame(Count=c(as.numeric(t(Count1)),as.numeric(t(Count2))),
+				founder=rep(1:nF,2*nrepl),
+				TRT = c(rep(1,nF*nrepl),rep(2,nF*nrepl)),
+				REP = c(rep(1:nrepl,each=nF),rep(1:nrepl,each=nF)))
+			D.x = xtabs(Count ~ founder + TRT + REP, data = tdf)
+			out = mantelhaen.test(D.x,correct=TRUE)
+			}
+		log10p = -log10(out$p.value)
+		}
+	log10p
+	}
+        
+add_genetic = function(df){
+	df$cM = rep(NA,nrow(df))
+	fm=read.table("flymap.r6.txt",header=FALSE)
+	colnames(fm)=c("chr","pos","cM")
+	library(splines)
+	for(chrs in c("chrX","chr2L","chr2R","chr3L","chr3R")){
+		fmX = fm %>% filter(chr==chrs)
+		out = ksmooth(fmX$pos,fmX$cM,kernel="normal",bandwidth=3e6)
+		f_of_x = splinefun(out$x,out$y)
+		temp = f_of_x(df$pos[df$chr==chrs])
+		df$cM[df$chr==chrs] = temp
+		}
+	df
+	}
+
+Heritability = function(p1, p2, nrepl, ProportionSelect, af_cutoff){
+	nF = ncol(p1)
+	tdf = data.frame(freq=c(as.numeric(t(p1)),as.numeric(t(p2))),
+		founder=rep(1:nF,2*nrepl),
+		TRT = c(rep("C",nF*nrepl),rep("Z",nF*nrepl)),
+		REP = c(rep(1:nrepl,each=nF),rep(1:nrepl,each=nF)))
+
+	Falconer_H2 = tdf %>%
+		pivot_wider(names_from = TRT, values_from = freq) %>%
+		mutate(mean_diff_sq = (Z-C)^2) %>%
+		mutate(mean_af_C = case_when(C <= af_cutoff ~ af_cutoff, .default = C)) %>%
+		mutate(H2temp = mean_diff_sq/mean_af_C) %>%
+		group_by(REP) %>%
+		summarize(H2temp_sum = sum(H2temp)) %>%
+		ungroup() %>%
+		left_join(ProportionSelect,by="REP") %>%
+		filter(!is.na(Proportion)) %>%
+		mutate(Falcon_i = dnorm(qnorm(1-Proportion))/Proportion) %>%
+		group_by(REP) %>%
+		summarize(H2 = 200 * H2temp_sum / Falcon_i^2) %>%
+		ungroup() %>%
+		summarize(mH2 = mean(H2)) %>%
+		pull(mH2)
+			
+	Cutler_H2 = tdf %>%
+		pivot_wider(names_from = TRT, values_from = freq) %>%
+		left_join(ProportionSelect,by="REP") %>%
+		filter(!is.na(Proportion)) %>%
+		mutate(Penetrance = (Z * Proportion)/C) %>%
+		mutate(Penetrance = case_when(Penetrance <= Proportion/2 ~ Proportion/2,
+						  Penetrance >= 2*Proportion ~ 2*Proportion,
+						  .default = Penetrance)) %>% 
+		mutate(Affect = qnorm(1-Proportion) - qnorm(1-Penetrance)) %>%
+		mutate(marg_Va = Affect^2 * C) %>%
+		group_by(REP) %>%
+		mutate(H2 = 200*sum(marg_Va)) %>%
+		ungroup() %>%
+		summarize(mH2 = mean(H2)) %>%
+		pull(mH2)
+
+	list(Falconer_H2=Falconer_H2, Cutler_H2=Cutler_H2)
+	}
+
+doscan = function(df,chr,Nfounders){
+  sexlink = 1
+  if(chr=="chrX"){ sexlink=0.75 }
+  
+  # I tested with xx2$data[[1]]
+  df2 = df %>%
+    unnest(cols = c(sample, Groups, Haps, Err, Names)) %>%
+    left_join(recodeTable) %>%
+    select(-sample) %>% mutate(sample=pool) %>% select(-pool) %>%
+    left_join(Numflies, join_by(sample==pool)) %>%
+    separate(sample,into=c("longTRT","REP","REPrep"),remove=FALSE) %>%
+    left_join(TreatmentMapping)
+  
+  # only analyze data for which all founders are discernable..
+  allFounders = as.numeric(df2 %>% mutate(mm = max(unlist(Groups))) %>% summarize(max(mm)))	
+  
+  ll = list(Wald_log10p = NA, Pseu_log10p = NA, Falc_H2 = NA, Cutl_H2 = NA, avg.var = NA)
+  if(allFounders!=Nfounders){ return(ll) }
+  
+  ##  now cases where all founders are OK
+  ##  now collapse any pure replicates.  This is tidy ugly.  But I feel there 
+  ##  is value in keeping dataframe columns as lists...
+  df3 = df2 %>%
+    select(-Groups) %>%
+    group_by(TRT,REP) %>%	
+    summarise(Err_mean = list(reduce(map(Err, ~as.matrix(.x)), `+`)/length(Err)),
+              Haps_mean = list(reduce(map(Haps, ~as.vector(.x)), `+`)/length(Haps)),
+              Names = list(first(Names)),
+              Num_mean = sexlink*mean(Num)) %>%
+    rename(Haps=Haps_mean,Num=Num_mean,Err=Err_mean)
+  
+  ## these summaries of the data are pretty useful for tests
+  p1 = df3 %>% filter(TRT=="C") %>% pull(Haps) %>% as.data.frame() %>% as.matrix() %>% t() 
+  row.names(p1) <- NULL
+  p2 = df3 %>% filter(TRT=="Z") %>% pull(Haps) %>% as.data.frame() %>% as.matrix() %>% t()
+  row.names(p2) <- NULL
+  covar1 = do.call(abind, c(df3 %>% filter(TRT=="C") %>% pull(Err), along = 3))
+  covar2 = do.call(abind, c(df3 %>% filter(TRT=="Z") %>% pull(Err), along = 3))
+  nrepl = df3 %>% filter(TRT=="C") %>% nrow()
+  nrepl == df3 %>% filter(TRT=="Z") %>% nrow()
+  N1 = df3 %>% filter(TRT=="C") %>% pull(Num)
+  N2 = df3 %>% filter(TRT=="Z") %>% pull(Num)
+  
+  wt = tryCatch(
+    wald.test3(p1,p2,covar1,covar2,nrepl,N1,N2),
+    error = function(e) list(wald.test=NA, p.value=NA, avg.var=NA)
+  )
+  Wald_log10p = -log10(wt$p.value)
+  Pseu_log10p = tryCatch(
+    pseudoN.test(p1,p2,covar1,covar2,nrepl,N1,N2),
+    error = function(e) NA
+  )
+  
+  af_cutoff = 0.01     # 1% --- heritability estimators can be off for really low allele frequencies
+  temp = Heritability(p1, p2, nrepl, ProportionSelect, af_cutoff)
+  Falc_H2 = temp$Falconer_H2
+  Cutl_H2 = temp$Cutler_H2
+  
+  ll = list(Wald_log10p = Wald_log10p, Pseu_log10p = Pseu_log10p,
+            Falc_H2 = Falc_H2, Cutl_H2 = Cutl_H2, avg.var = wt$avg.var)
+  ll
+}
+
+
+````
 
 ## LSEI vs GLM comparison
 <img width="1408" height="818" alt="image" src="https://github.com/user-attachments/assets/394cc365-759d-414b-b15f-eecd927082c2" />
