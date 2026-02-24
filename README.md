@@ -1541,7 +1541,7 @@ write.table(bb3, fileout)
 </details>
 
 ### Modified DGRP Scripts:
-haps2scan.Apr2025.code
+scan_functions
 Key modification Made:
 
 1. Wald.test3 now has eigenvalue filtering, with many founders being so similar to one another, haplotype contributions coming from all of them are small, therefore we filter values that are smaller than e-4. (Helps to minimize NAs calculated from overly complex matrix & removes uneeded data that wouldn't have helped with inferences. Some signal might be lost, but without filtering, no signal would even be generated.)
