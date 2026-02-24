@@ -1118,7 +1118,7 @@ REFALT2haps.Andreas.code.r <<< This is the statistic side of the script
 CONCERNS!!!!! <<<< DGRP ONLY >>>>
 
 Founders data: really low coverage ~11x which creates a multitude of problems in REFALT2haps step.
-1. Code is expecting that all founders have at least 1 read for that specific SNP. When you have 8 founders that is a non-issue, its somewhat of an issue.
+1. Code is expecting that all founders have at least 1 read for that specific SNP. Not the biggest contributor to a problem.
 
 2. Code is expecting homozygosity at every site, ALL founder samples have to be <0.03 or >0.97. Which is problematic in founder samples that are low coverage (DGRP RILs are ~11x coverage). Which leads to a lot of samples actually being non-homozygotic, i.e. somewhere between 0.03 and 0.97. Which gets filtered out (this is where most of the sites are getting filtered out)
 <img width="852" height="414" alt="image" src="https://github.com/user-attachments/assets/2851764b-e950-47bc-962c-54f9ad737f08" />
