@@ -1202,7 +1202,7 @@ Key modification Made:
 
 2. Hierarchical clustering Cut off Testing & finding appropriate clustering distance (h_cutoff <- 1.5 DGRP | h_cutoff <- 2.5 DSPR)
 
-3. Added clustering of similar haplotypes (was not done in original xQTL Anthony long pipeline), now clusters are calculated and grouped via h_cutoff (lower h_cutoff means smaller cut off to define dissimilarity (Less SNP different))
+3. Added clustering of similar haplotypes (was not done in original xQTL Anthony Long pipeline), now clusters are calculated and grouped via h_cutoff (lower h_cutoff means smaller cut off to define dissimilarity (Less number of SNP different between founders))
 
 4. Clustering occurs before lsei runs, removes calculations errors associated with complex matrix with large number of founder samples (that are very similar to one another across the entire window)
 
