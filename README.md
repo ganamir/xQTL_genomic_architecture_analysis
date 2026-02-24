@@ -2,6 +2,10 @@
 
 # DGRP & DSPR Processing Pipeline
 ## 1. Merge samples from different Lanes <<< DGRP ONLY!! >>> Skip to step 2 for DSPR
+
+<details>
+<summary>Click to expand code</summary>
+
 ````
 #!/bin/bash
 
@@ -66,10 +70,15 @@ echo ""
 echo "Output location: $OUTPUT_DIR"
 ls -lh "$OUTPUT_DIR"/*_merged_*.fastq.gz 2>/dev/null | wc -l | xargs echo "Merged files created:"
 
-
 ````
 
+</details>
+
 ## 2. Trim files
+
+<details>
+<summary>Click to expand code</summary>
+
 ````
 #!/bin/bash
 DIR="/mnt/d/xQTL_2025_Data/DGRP_XQTL/trimmed_fastqs"
@@ -91,7 +100,13 @@ done
 
 ````
 
+</details>
+
 ## 3. BWA mem merge reads, sort, and output bams
+
+<details>
+<summary>Click to expand code</summary>
+
 ````
 # Directory containing trimmed .gz files
 input_dir="/mnt/d/xQTL_2025_Data/Final_Window_Analysis/DGRP_xQTL/RawProcessing"
@@ -124,7 +139,13 @@ done
 
 ````
 
+</details>
+
 ## 4. Remove Duplicates via dedup
+
+<details>
+<summary>Click to expand code</summary>
+
 ````
 #!/bin/bash
 INPUT_DIR="/mnt/d/xQTL_2025_Data/Final_Window_Analysis/DGRP_xQTL/RawProcessing/bams"
@@ -156,7 +177,13 @@ for BAM in "$INPUT_DIR"/*.bam; do
 done
 ````
 
+</details>
+
 ## 5. Add ReadGroups & Rename Files:
+
+<details>
+<summary>Click to expand code</summary>
+
 ````
 #!/bin/bash
 indir="/mnt/d/xQTL_2025_Data/Final_Window_Analysis/DGRP_xQTL/Spino3"
@@ -210,7 +237,13 @@ done
 
 ````
 
+</details>
+
 ## 6. Create sample table info with bams
+
+<details>
+<summary>Click to expand code</summary>
+
 ````
 #!/bin/bash
 # Usage: bash make_bam_list.sh /path/to/output_list.txt
@@ -243,7 +276,13 @@ done
 echo "BAM list written to $out_list"
 ````
 
+</details>
+
 ## 7. Make Bam table:
+
+<details>
+<summary>Click to expand code</summary>
+
 ````
 #!/usr/bin/env bash
 # Usage: ./make_bam_table.sh output.tsv
@@ -272,7 +311,13 @@ done
 echo "✅ TSV file created: $OUT_TSV"
 ````
 
+</details>
+
 ## 8. Combine Founders & Samples:
+
+<details>
+<summary>Click to expand code</summary>
+
 ````
 #!/bin/bash
 # Usage: bash combined_local_simple.sh bam_list.txt output_dir
@@ -332,7 +377,13 @@ wait
 echo "=== All chromosomes complete ==="
 ````
 
+</details>
+
 ## 8.5. Debugging code for assesing h_cutoff, and various other problems associated with selecting options, such as wald test cut_off. 
+
+<details>
+<summary>Click to expand code</summary>
+
 ````
 library(tidyverse)
 library(limSolve)
@@ -1049,12 +1100,19 @@ write.table(bb3, fileout)
 #write.table(bb4, fileout_meansBySample)
 
 ````
+
+</details>
+
 Because we have ~226 DGRP founders, we need to make sure that hierachical clustering works properly and creates a proper amount of haplotype blocks (x>1).
 
 Number of haplotypes has to stay biologically relevant, while not being overdiscriminatory (>100)
 
 ## 9. Modify your input_table and haplotype.parameters files:
 haplotype.parameters
+
+<details>
+<summary>Click to expand code</summary>
+
 ````
 # JUICE Haplotype Parameters
 # This file defines the parameters for haplotype estimation in the JUICE dataset
@@ -1082,7 +1140,13 @@ names_in_bam=c("C1","C2","C3","C4","C5","C6","C7","C8","A1","A2","A3","A4","A5",
 
 ````
 
+</details>
+
 input_table
+
+<details>
+<summary>Click to expand code</summary>
+
 ````
 "bam" "REP" "REPrep" "Num" "Proportion" "TRT"
 "1" "C1" 1 1 500 NA "C"
@@ -1102,6 +1166,8 @@ input_table
 "15" "A7" 7 1 500 0.060 "Z"
 "16" "A8" 8 1 500 0.033 "Z"
 ````
+
+</details>
 
 ## 10. Run REFALT2haps.Andreas.sh (for DGRP, running a modified REFALT2haps.Andreas.code.r, reference below!)
 Make sure that REFALT.chr . txt are located in the process folder
@@ -1139,6 +1205,9 @@ Key modification Made:
 3. Added clustering of similar haplotypes (was not done in original xQTL Anthony long pipeline), now clusters are calculated and grouped via h_cutoff (lower h_cutoff means smaller cut off to define dissimilarity (Less SNP different))
 
 4. Clustering occurs before lsei runs, removes calculations errors associated with complex matrix with large number of founder samples (that are very similar to one another across the entire window)
+
+<details>
+<summary>Click to expand code</summary>
 
 ````
 # =============================================================================
@@ -1349,7 +1418,7 @@ cat("Output saved:", fileout, "\n")
 
 ````
 
-
+</details>
 
 ## 11. Run haps2scan.Apr2025
 ````
@@ -1371,6 +1440,10 @@ Key modification Made:
 1. doscan2 works with NAs that are introduced in complex matrix calculations
 
 2. Commented out founder contribution dataset. Due to clustering of haplotypes, we no longer are able to identify which founder set contributed to the window, which is fine for DGRP data.
+
+<details>
+<summary>Click to expand code</summary>
+
 ````
 doscan2 = function(df,chr,Nfounders){
   sexlink = 1
@@ -1463,13 +1536,18 @@ bb3 = add_genetic(bb2)
 write.table(bb3, fileout)
 #write.table(bb4, fileout_meansBySample)
 
-
 ````
+
+</details>
+
 ### Modified DGRP Scripts:
 haps2scan.Apr2025.code
 Key modification Made:
 
 1. Wald.test3 now has eigenvalue filtering, with many founders being so similar to one another, haplotype contributions coming from all of them are small, therefore we filter values that are smaller than e-4. (Helps to minimize NAs calculated from overly complex matrix & removes uneeded data that wouldn't have helped with inferences. Some signal might be lost, but without filtering, no signal would even be generated.)
+
+<details>
+<summary>Click to expand code</summary>
 
 ````
 #########
@@ -1724,6 +1802,8 @@ doscan = function(df,chr,Nfounders){
 
 
 ````
+
+</details>
 
 ## LSEI vs GLM comparison
 <img width="1408" height="818" alt="image" src="https://github.com/user-attachments/assets/394cc365-759d-414b-b15f-eecd927082c2" />
