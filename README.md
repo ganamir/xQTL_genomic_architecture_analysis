@@ -265,8 +265,16 @@ ls -lh "$OUTDIR"/${SRR}*
 
 </details>
 
-## 6. Finally proceed to the next pipeline.
+## 6. If error about empty space occurs, run this; otherwise proceed to the processing pipeline
 
+<details>
+<summary>Click to expand code</summary>
+
+````
+sed -i 's/[[:space:]]*$//' srr_accessions.txt
+````
+
+</details>
 
 # DGRP & DSPR Processing Pipeline
 ## 1. Merge samples from different Lanes <<< DGRP ONLY!! >>> Skip to step 2 for DSPR
