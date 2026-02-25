@@ -139,6 +139,7 @@ esearch -db sra -query SRP000694 | efetch -format runinfo > SRP000694_runinfo.cs
 
 </details>
 
+And manually download line 306; https://www.ncbi.nlm.nih.gov/sra/SRX006140[accn] . Leaving only 153 & 386 as 454 single read sequencing. 
 
 ## 4. Filter NCBI metadata file for lines of interest:
 
