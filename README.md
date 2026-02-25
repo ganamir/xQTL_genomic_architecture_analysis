@@ -1,4 +1,272 @@
 # xQTL_genomic_architecture_analysis
+# DGRP Founder Prep
+
+## 1. Download DGRP LINES data (drgp_lines.tsv) from https://dgrpool.epfl.ch/
+
+## 2. Filter DGRP Line data to contain Founder lines of interest:
+
+### R code
+<details>
+<summary>Click to expand code</summary>
+
+````
+found_table <- read_tsv("D:/xQTL_2025_Data/FounderSamples/DGRP_2024_Founders/dgrp_lines.tsv")
+foundlines_2024 <- c(
+  25183,
+  25180,
+  25181,
+  25182,
+  25188,
+  25190,
+  25191,
+  25192,
+  25193,
+  25194,
+  25197,
+  25201,
+  25203,
+  25206,
+  25208,
+  25209,
+  25210,
+  25445,
+  25744,
+  28122,
+  28123,
+  28130,
+  28131,
+  28134,
+  28135,
+  28136,
+  28138,
+  28139,
+  28140,
+  28141,
+  28142,
+  28144,
+  28145,
+  28146,
+  28148,
+  28149,
+  28150,
+  28151,
+  28152,
+  28154,
+  28156,
+  28157,
+  28161,
+  28165,
+  28166,
+  28168,
+  28171,
+  28173,
+  28174,
+  28176,
+  28178,
+  28179,
+  28182,
+  28183,
+  28184,
+  28185,
+  28188,
+  28189,
+  28191,
+  28192,
+  28197,
+  28198,
+  28199,
+  28204,
+  28206,
+  28208,
+  28211,
+  28213,
+  28218,
+  28224,
+  28226,
+  28229,
+  28230,
+  28234,
+  28236,
+  28240,
+  28242,
+  28243,
+  28252,
+  28253,
+  28257,
+  28261,
+  28263,
+  28274,
+  28276,
+  29655,
+  29656,
+  29657,
+  29659,
+  37525,
+  55014,
+  55016,
+  55017,
+  55021,
+  55026,
+  55027,
+  55028,
+  55032,
+  83729,
+  25175
+)
+mapping <- found_table %>%
+  filter(bloomington_id %in% foundlines_2024) %>%
+  select(dgrp, bloomington_id) %>%
+  mutate(line_num = as.integer(str_replace(dgrp, "DGRP_", "")),
+         founder = paste0("REF_", line_num, "/ALT_", line_num))
+write.csv(mapping, "dgrp_mapping.csv", row.names = FALSE) ## Save the data
+
+````
+
+</details>
+
+## 3. Download SRP000694 run info from NCBI
+
+### BASH
+
+<details>
+<summary>Click to expand code</summary>
+
+````
+
+esearch -db sra -query SRP000694 | efetch -format runinfo > SRP000694_runinfo.csv
+
+````
+
+</details>
+
+
+## 4. Filter NCBI metadata file for lines of interest:
+
+### R code
+<details>
+<summary>Click to expand code</summary>
+
+````
+# ==== Working with Founders Data ===== #
+setwd("D:/xQTL_2025_Data/Final_Window_Analysis/DGRP_xQTL/DGRP_Founder_100")
+SRA_found <- read_csv("D:/xQTL_2025_Data/Final_Window_Analysis/DGRP_xQTL/DGRP_Founder_100/SRP000694_runinfo.csv")
+mapping <- read.csv("dgrp_mapping.csv")
+line_nums <- mapping$line_num
+
+head(SRA_found$SampleName, n = 40)
+head(SRA_found$LibraryName,n = 40)
+head(mapping)
+
+SRA_found <- SRA_found %>%
+  mutate(line_num = case_when(
+    str_detect(SampleName, "^BCM-DGRP") ~ as.integer(str_replace(SampleName, "BCM-DGRP", "")),
+    str_detect(SampleName, "^\\d+$") ~ as.integer(SampleName),
+    TRUE ~ NA_integer_
+  ))
+
+my_runs <- SRA_found %>%
+  filter(line_num %in% line_nums,
+         Platform == "ILLUMINA",
+         LibraryLayout == "PAIRED")
+
+SRA_found %>%
+  filter(str_detect(SampleName, "153|306|386") | 
+           str_detect(LibraryName, "153|306|386")) %>%
+  select(Run, SampleName, LibraryName, Platform, LibraryLayout) %>%
+  print(n = 20)
+
+cat("Matched lines:", length(unique(my_runs$line_num)), "of", length(line_nums), "\n")
+missing <- setdiff(line_nums, unique(my_runs$line_num))
+cat("Missing lines:", paste(missing, collapse = ", "), "\n")
+my_runs %>% count(line_num) %>% arrange(desc(n)) %>% print(n = 20)
+
+
+# ==== Assemble data ==== #
+extra_runs <- SRA_found %>%
+  filter(Run %in% c("SRR933574", "SRR933562", "SRR518740", "SRR518741", 
+                    "SRR518742", "SRR518743", "SRR518744", "SRR518745", 
+                    "SRR518746"))
+
+my_runs_all <- bind_rows(my_runs, extra_runs)
+cat("Total SRR runs:", nrow(my_runs_all), "\n")
+cat("Matched lines:", length(unique(my_runs_all$line_num)), "of", length(line_nums), "\n")
+missing <- setdiff(line_nums, unique(my_runs_all$line_num))
+cat("Missing lines:", paste(missing, collapse = ", "), "\n") #Should be 0 out of 100
+my_runs %>% count(line_num) %>% arrange(desc(n)) %>% print(n = 20)
+writeLines(my_runs_all$Run, "srr_accessions.txt")
+write.csv(my_runs_all, "my_100_founders_sra_metadata.csv", row.names = FALSE)
+
+
+````
+
+</details>
+
+
+## 5. Download SRA data from NCBI with the filtered data
+
+### BASH
+<details>
+<summary>Click to expand code</summary>
+
+````
+#!/bin/bash
+#SBATCH --job-name=sra_download
+#SBATCH --array=1-119%10
+#SBATCH --cpus-per-task=4
+#SBATCH --mem=8G
+#SBATCH --output=output_log/sra_dl_%A_%a.out
+#SBATCH --error=output_log/sra_dl_%A_%a.err
+
+# Download DGRP founder FASTQs from SRA
+# Usage: sbatch download_founders.sbatch
+#
+# %10 means max 10 jobs at once (don't hammer SRA servers)
+# Adjust array range to match number of lines in srr_accessions.txt
+
+set -euo pipefail
+
+# ---- EDIT THESE ----
+SRR_LIST="/mnt/d/xQTL_2025_Data/Final_Window_Analysis/DGRP_xQTL/DGRP_Founder_100/srr_accessions.txt"
+OUTDIR="/mnt/d/xQTL_2025_Data/Final_Window_Analysis/DGRP_xQTL/DGRP_Founder_100/founder_fastqs"
+# --------------------
+
+mkdir -p "$OUTDIR"
+
+# Get SRR for this array task
+SRR=$(sed -n "${SLURM_ARRAY_TASK_ID}p" "$SRR_LIST")
+
+if [[ -z "$SRR" ]]; then
+    echo "No SRR at line $SLURM_ARRAY_TASK_ID"
+    exit 0
+fi
+
+echo "=== Task $SLURM_ARRAY_TASK_ID: $SRR ==="
+echo "Started: $(date)"
+
+# Skip if already downloaded
+if ls "$OUTDIR"/${SRR}*.fastq.gz 1>/dev/null 2>&1; then
+    echo "Already exists, skipping"
+    exit 0
+fi
+
+# Download
+prefetch --max-size 50G "$SRR"
+
+# Convert to FASTQ (--split-files handles both PE and SE)
+fasterq-dump --split-files --threads ${SLURM_CPUS_PER_TASK} -O "$OUTDIR" "$SRR"
+
+# Compress
+pigz -p ${SLURM_CPUS_PER_TASK} "$OUTDIR"/${SRR}*.fastq
+
+echo "Finished: $(date)"
+ls -lh "$OUTDIR"/${SRR}*
+
+````
+
+</details>
+
+## 6. Finally proceed to the next pipeline.
+
 
 # DGRP & DSPR Processing Pipeline
 ## 1. Merge samples from different Lanes <<< DGRP ONLY!! >>> Skip to step 2 for DSPR
