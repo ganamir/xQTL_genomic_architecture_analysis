@@ -278,51 +278,29 @@ echo "BAM list written to $out_list"
 
 </details>
 
-## 7. Make Bam table:
+## 7. Combine Founders & Samples:
 
 <details>
 <summary>Click to expand code</summary>
 
 ````
-#!/usr/bin/env bash
-# Usage: ./make_bam_table.sh output.tsv
-
-OUT_TSV=${1:-bam_list.tsv}
-
-# Define your two BAM directories
-dir1="/mnt/d/xQTL_2025_Data/Final_Window_Analysis/DGRP_xQTL/Spino3/RG_groups"
-dir2="/mnt/d/grenepipe/gp_analysis/rudflies_2024/dedup"
-
-# Header
-echo -e "sample\tbam" > "$OUT_TSV"
-
-for BAM_DIR in "$dir1" "$dir2"; do
-    if [ ! -d "$BAM_DIR" ]; then
-        echo "Warning: directory $BAM_DIR does not exist, skipping."
-        continue
-    fi
-    find "$BAM_DIR" -maxdepth 1 -type f -name "*.bam" | sort | while read -r bamfile; do
-        sample=$(basename "$bamfile" .bam)
-        echo -e "${sample}\t${bamfile}" >> "$OUT_TSV"
-    done
-    echo "Added BAMs from $BAM_DIR"
-done
-
-echo "✅ TSV file created: $OUT_TSV"
+# Download DGRP Lines here:
+# NCSU source, dm6, with DGRP-XXX sample names
+wget https://resources.aertslab.org/DGRP2/NCSU/final/dm6/DGRP2.source_NCSU.dm6.final.bcf
+wget https://resources.aertslab.org/DGRP2/NCSU/final/dm6/DGRP2.source_NCSU.dm6.final.bcf.csi
 ````
-
-</details>
-
-## 8. Combine Founders & Samples:
-
-<details>
-<summary>Click to expand code</summary>
+#Then create RefAlt Tables:
 
 ````
 #!/bin/bash
-# Usage: bash combined_local_simple.sh bam_list.txt output_dir
+# Usage: bash build_combined_refalt.sh bam_list.txt output_dir
+#
+# Generates one RefAlt file per chromosome with founder genotypes (binary)
+# and pool-seq read counts (AD) side by side.
+# Founder sites filtered to N_MISSING=0, biallelic SNPs only.
 
 ref="/mnt/d/xQTL_2025_Data/ref/dm6.fa"
+founder_bcf="/mnt/d/xQTL_2025_Data/Final_Window_Analysis/DGRP_xQTL/Spino3/RG_groups/founders_vcfs/my_100_founders.bcf"
 bams=$1
 output=$2
 mkdir -p "$output"
@@ -339,34 +317,84 @@ while read -r bam; do
 done < "$bams"
 echo "=== Indexing complete ==="
 
-# --- Run mpileup per chromosome in parallel ---
+# --- Chromosome name mapping: founder BCF uses 2L, BAMs use chr2L ---
+declare -A CHR_MAP
+CHR_MAP=( [chr2L]=2L [chr2R]=2R [chr3L]=3L [chr3R]=3R [chrX]=X )
+
 declare -a chrs=("chrX" "chr2L" "chr2R" "chr3L" "chr3R")
 
 run_chrom() {
     mychr=$1
-    echo "Processing chromosome $mychr"
+    fchr=${CHR_MAP[$mychr]}
+    echo "Processing chromosome $mychr (founder: $fchr)"
 
+    # Step 1: Extract filtered founder SNP positions
+    positions="${output}/positions.${mychr}.tsv"
+    bcftools view -m2 -M2 -v snps -r "$fchr" -i 'N_MISSING=0' "$founder_bcf" | \
+        bcftools query -f '%CHROM\t%POS\n' | \
+        awk -v chr="$mychr" '{print chr"\t"$2}' > "$positions"
+    n_sites=$(wc -l < "$positions")
+    echo "  Founder sites (N_MISSING=0): $n_sites"
+
+    # Step 2: Extract founder genotypes (binary) keyed by POS
+    founder_tmp="${output}/tmp_founder.${mychr}.txt"
+    bcftools view -m2 -M2 -v snps -r "$fchr" -i 'N_MISSING=0' "$founder_bcf" | \
+        bcftools query -f '%POS[\t%GT]\n' | \
+        awk '{
+            printf "%s", $1
+            for(i=2; i<=NF; i++) {
+                if($i=="0/0" || $i=="0|0")
+                    printf "\t1\t0"
+                else if($i=="1/1" || $i=="1|1")
+                    printf "\t0\t1"
+                else
+                    printf "\tNA\tNA"
+            }
+            printf "\n"
+        }' | sort -k1,1n > "$founder_tmp"
+    echo "  Founder genotypes extracted: $(wc -l < "$founder_tmp") rows"
+
+    # Step 3: mpileup pool BAMs at founder positions only
     bcf_out="${output}/calls.${mychr}.bcf"
-
-    bcftools mpileup -I -d 1000 -r "$mychr" -a "FORMAT/AD,FORMAT/DP" \
+    bcftools mpileup -I -d 1000 -r "$mychr" -T "$positions" -a "FORMAT/AD,FORMAT/DP" \
         -f "$ref" -b "$bams" --threads 12 | \
         bcftools call -mv --threads 12 -Ob -o "$bcf_out"
-
     bcftools index "$bcf_out"
 
-    echo -ne "CHROM\tPOS" > "${output}/RefAlt.${mychr}.txt"
-    bcftools query -l "$bcf_out" | awk '{printf("\tREF_%s\tALT_%s",$1,$1)}' >> "${output}/RefAlt.${mychr}.txt"
-    echo -ne "\n" >> "${output}/RefAlt.${mychr}.txt"
+    # Step 4: Extract pool AD counts keyed by POS
+    pool_tmp="${output}/tmp_pool.${mychr}.txt"
+    bcftools view -m2 -M2 -v snps -i 'QUAL>59' "$bcf_out" | \
+        bcftools query -f '%POS[\t%AD{0}\t%AD{1}]\n' | \
+        grep -v '\.' | sort -k1,1n > "$pool_tmp"
+    echo "  Pool SNPs called: $(wc -l < "$pool_tmp") rows"
 
-    bcftools view -m2 -M2 -v snps -i 'QUAL>59' "$bcf_out" |
-        bcftools query -f '%CHROM %POS [ %AD{0} %AD{1}] [%GT]\n' |
-        grep -v '\.' | awk 'NF-=1' >> "${output}/RefAlt.${mychr}.txt"
+    # Step 5: Build combined header
+    refalt="${output}/RefAlt.${mychr}.txt"
+    echo -ne "CHROM\tPOS" > "$refalt"
+    # Founder columns: REF_21 ALT_21 REF_26 ALT_26 ...
+    bcftools query -l "$founder_bcf" | while read -r s; do
+        num=$(echo "$s" | sed 's/DGRP-0*//')
+        echo -ne "\tREF_${num}\tALT_${num}"
+    done >> "$refalt"
+    # Pool columns: REF_A1 ALT_A1 REF_C1 ALT_C1 ...
+    bcftools query -l "$bcf_out" | awk '{printf("\tREF_%s\tALT_%s",$1,$1)}' >> "$refalt"
+    echo -ne "\n" >> "$refalt"
+
+    # Step 6: Join founder + pool on POS, prepend CHROM
+    join -t$'\t' -1 1 -2 1 "$founder_tmp" "$pool_tmp" | \
+        awk -v chr="$mychr" 'BEGIN{OFS="\t"} {print chr, $0}' >> "$refalt"
+
+    n_combined=$(($(wc -l < "$refalt") - 1))
+    echo "  Combined RefAlt: $n_combined SNPs -> $refalt"
+
+    # Cleanup
+    rm -f "$founder_tmp" "$pool_tmp" "$positions"
 
     echo "Finished chromosome $mychr"
 }
 
 export -f run_chrom
-export ref bams output
+export ref founder_bcf bams output
 
 # Run all chromosomes in parallel
 for mychr in "${chrs[@]}"; do
@@ -375,7 +403,9 @@ done
 wait
 
 echo "=== All chromosomes complete ==="
+ls -lh "$output"/RefAlt.*.txt
 ````
+
 
 </details>
 
