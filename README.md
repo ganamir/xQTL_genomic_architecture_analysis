@@ -325,6 +325,8 @@ EOF
 
 Then download the missing files:
 
+Rerun this code if some donwloads still fail, NCBI is timing out.
+
 ````
 #!/bin/bash
 #SBATCH --job-name=sra_missing
