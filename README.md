@@ -2142,6 +2142,40 @@ jupyter notebook --no-browser
 # Now you should be connected to the conda env python.
 ````
 
+## 3. Install grenedalf & filter 2023 BCF file for E & S samples:
+
+````
+# === Setting up vcf data for .sync output === #
+
+cd /mnt/d/xQTL_2025_Data/Final_Window_Analysis/OutdoorSample_CVTK/input_files
+
+sed -i 's/\r$//' metadata_2023.tsv
+
+bcftools query -l bcftools_filtered-all.vcf.gz > vcf_samples.txt
+
+awk -F'\t' 'NR>1 && $1<=195 && ($8=="E"||$8=="S") && $4>=1 && $4<=4 { key=$6"\t"$4; if(!seen[key]++) cage_tpt[$6]++ } END { for(c in cage_tpt) if(cage_tpt[c]==4) print c }' metadata_2023.tsv | sort -n > complete_cages_full.tx
+
+cat complete_cages_full.txt
+
+awk -F'\t' 'NR==FNR{cages[$1];next} FNR==1{next} $1<=195&&($8=="E"||$8=="S")&&$4>=1&&$4<=4&&$6 in cages&&$12=="spino"{key=$6 SUBSEP $4;if(!seen[key]||($11=="single"&&prev_rep[key]=="dupl")){seen[key]=$1;prev_rep[key]=$11}} $1<=195&&$8=="E"&&$4==0{founders[$1]=1} END{for(k in seen){split(k,a,SUBSEP);cage_count[a[1]]++;samps[a[1],a[2]]=seen[k]} for(c in cage_count){if(cage_count[c]==4){for(t=1;t<=4;t++) print samps[c,t]}} for(f in founders) print f}' complete_cages_full.txt metadata_2023.tsv | sort -n > samples_all.txt
+
+grep -Fxf vcf_samples.txt samples_all.txt > samples_final.txt
+
+wc -l samples_final.txt
+
+awk -F'\t' 'NR==FNR{samps[$1];next} FNR>1&&$1 in samps{print "samp="$1,"tpt="$4,"cage="$6,"treat="$8,"rep="$11}' samples_final.txt metadata_2023.tsv | sort -t= -k3,3n -k2,2n
+
+bcftools view -S samples_final.txt bcftools_filtered-all.vcf.gz -Oz -o filtered_E_S.vcf.gz
+bcftools index filtered_E_S.vcf.gz
+
+# === Grenedalf === #
+git clone --recursive https://github.com/lczech/grenedalf.git
+cd grenedalf
+make
+
+ls grenedalf/grenedalf/bin/
+./grenedalf/grenedalf/bin/grenedalf --help
+````
 
 
 
