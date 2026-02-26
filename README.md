@@ -2226,7 +2226,7 @@ bcftools annotate --rename-chrs chr_rename.txt filtered_E_S.vcf.gz -Oz -o filter
 
 bcftools index filtered_E_S_chr.vcf.gz
 
-./grenedalf/grenedalf/bin/grenedalf sync --vcf-path filtered_E_S_chr.vcf.gz --reference-genome-fasta /mnt/d/xQTL_2025_Data/ref/dm6.fa --filter-sample-min-read-depth 2 --filter-sample-max-read-depth 1000 --filter-sample-only-biallelic-snps --out-dir sync_file/ --threads 32
+./grenedalf/grenedalf/bin/grenedalf sync --vcf-path filtered_E_S_chr.vcf.gz --reference-genome-fasta /mnt/d/xQTL_2025_Data/ref/dm6.fa --filter-sample-min-read-depth 2 --filter-sample-max-read-depth 1000 --filter-sample-only-biallelic-snps --filter-region chr2L,chr2R,chr3L,chr3R,chrX --out-dir sync_file/ --threads 32
 
 # Make sure that sync.sync file does not exist, and the folder is deleted if you got an error running grenedalf and need to rerun it
 
