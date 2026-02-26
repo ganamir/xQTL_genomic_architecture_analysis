@@ -279,15 +279,103 @@ sed -i 's/[[:space:]]*$//' srr_accessions.txt
 </details>
 
 
-## 7. Merge Founders of similar lines
+## 7. Check for missing files
 
 <details>
 <summary>Click to expand code</summary>
 
 ````
+# Check what's downloaded
+ls founder_fastqs/*.fastq.gz | wc -l
+
+# Check for any uncompressed leftovers (pigz didn't finish)
+ls founder_fastqs/*.fastq 2>/dev/null
+
+# Check which SRRs have files
+ls founder_fastqs/*.fastq.gz | sed 's/.*\///' | sed 's/_[12]\.fastq\.gz//' | sed 's/\.fastq\.gz//' | sort -u > downloaded_srrs.txt
+
+# Compare to expected
+sort srr_accessions.txt > expected_srrs.txt
+comm -23 expected_srrs.txt downloaded_srrs.txt
+
+# Also check for zero-size files
+find founder_fastqs/ -name "*.fastq.gz" -empty
+
+for srr in SRR834507 SRR834537 SRR835038 SRR835042 SRR835047 SRR835063 SRR835223 SRR835333 SRR835939 SRR933566 SRR933574 SRR933592; do
+    grep "$srr" my_100_founders_sra_metadata.csv | awk -F',' '{print "'$srr'", $NF}'
+done
+
+cat > missing_srrs.txt << 'EOF'
+SRR834507
+SRR834537
+SRR835038
+SRR835042
+SRR835047
+SRR835063
+SRR835223
+SRR835333
+SRR835939
+SRR933566
+SRR933574
+SRR933592
+EOF
 
 
 ````
+
+Then download the missing files:
+
+````
+#!/bin/bash
+#SBATCH --job-name=sra_missing
+#SBATCH --array=1-12%6
+#SBATCH --cpus-per-task=8
+#SBATCH --mem=8G
+#SBATCH --output=sra_missing_%A_%a.out
+#SBATCH --error=sra_missing_%A_%a.err
+
+set -euo pipefail
+
+SRR_LIST="/mnt/d/xQTL_2025_Data/Final_Window_Analysis/DGRP_xQTL/DGRP_Founder_100/missing_srrs.txt"
+OUTDIR="/mnt/d/xQTL_2025_Data/Final_Window_Analysis/DGRP_xQTL/DGRP_Founder_100/founder_fastqs"
+TMPDIR="/tmp/sra_${SLURM_JOB_ID}_${SLURM_ARRAY_TASK_ID}"
+
+mkdir -p "$OUTDIR" "$TMPDIR"
+
+SRR=$(sed -n "${SLURM_ARRAY_TASK_ID}p" "$SRR_LIST")
+
+if [[ -z "$SRR" ]]; then
+    echo "No SRR at line $SLURM_ARRAY_TASK_ID"
+    exit 0
+fi
+
+echo "=== Task $SLURM_ARRAY_TASK_ID: $SRR ==="
+echo "Started: $(date)"
+
+# Skip if already done
+if ls "$OUTDIR"/${SRR}*.fastq.gz 1>/dev/null 2>&1; then
+    echo "Already exists, skipping"
+    exit 0
+fi
+
+# Download
+prefetch --max-size 50G "$SRR"
+
+# Convert to FASTQ on fast local filesystem
+fasterq-dump --split-files --threads ${SLURM_CPUS_PER_TASK} -O "$TMPDIR" -t "$TMPDIR" "$SRR"
+
+# Compress and move
+pigz -p ${SLURM_CPUS_PER_TASK} "$TMPDIR"/${SRR}*.fastq
+mv "$TMPDIR"/${SRR}*.fastq.gz "$OUTDIR"/
+rm -rf "$TMPDIR"
+
+echo "Finished: $(date)"
+ls -lh "$OUTDIR"/${SRR}*
+
+
+````
+
+
 
 </details>
 
