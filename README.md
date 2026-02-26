@@ -375,6 +375,16 @@ ls -lh "$OUTDIR"/${SRR}*
 
 ````
 
+If still failing to download, clear out locks, and reinstall manually
+
+````
+rm -f SRR835223/SRR835223.sra.lock SRR835333/SRR835333.sra.lock SRR835939/SRR835939.sra.lock SRR933592/SRR933592.sra.lock
+
+for srr in SRR835223 SRR835333 SRR835939 SRR933592; do
+    rm -rf ${srr}/*.lock
+    prefetch $srr
+done
+````
 
 
 </details>
