@@ -125,7 +125,7 @@ write.csv(mapping, "dgrp_mapping.csv", row.names = FALSE) ## Save the data
 </details>
 
 ## 3. Download SRP000694 run info from NCBI
-
+### IMPORTANT: NCBI connection times out for some samples, so need to re-download!!!! Step 7 covers that.
 ### BASH
 
 <details>
