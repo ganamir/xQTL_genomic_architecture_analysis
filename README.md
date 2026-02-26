@@ -2214,5 +2214,24 @@ ls grenedalf/grenedalf/bin/
 
 </details>
 
+## 4. Fix chromosome data and run grenedalf sync:
 
+<details>
+<summary>Click to expand code</summary>
+
+````
+echo -e "2L\tchr2L\n2R\tchr2R\n3L\tchr3L\n3R\tchr3R\n4\tchr4\nX\tchrX\nY\tchrY" > chr_rename.tx
+
+bcftools annotate --rename-chrs chr_rename.txt filtered_E_S.vcf.gz -Oz -o filtered_E_S_chr.vcf.g
+
+bcftools index filtered_E_S_chr.vcf.gz
+
+./grenedalf/grenedalf/bin/grenedalf sync --vcf-path filtered_E_S_chr.vcf.gz --reference-genome-fasta /mnt/d/xQTL_2025_Data/ref/dm6.fa --filter-sample-min-read-depth 2 --filter-sample-max-read-depth 1000 --filter-sample-only-biallelic-snps --out-dir sync_file/ --threads 32
+
+# Make sure that sync.sync file does not exist, and the folder is deleted if you got an error running grenedalf and need to rerun it
+
+````
+
+
+</details>
 
