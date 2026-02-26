@@ -266,7 +266,8 @@ ls -lh "$OUTDIR"/${SRR}*
 
 </details>
 
-## 6. If error about empty space occurs, run this; otherwise proceed to the processing pipeline
+
+## 6. If error about empty space occurs, run this; 
 
 <details>
 <summary>Click to expand code</summary>
@@ -276,6 +277,20 @@ sed -i 's/[[:space:]]*$//' srr_accessions.txt
 ````
 
 </details>
+
+
+## 7. Merge Founders of similar lines
+
+<details>
+<summary>Click to expand code</summary>
+
+````
+
+
+````
+
+</details>
+
 
 # DGRP & DSPR Processing Pipeline
 ## 1. Merge samples from different Lanes <<< DGRP ONLY!! >>> Skip to step 2 for DSPR
@@ -2120,6 +2135,9 @@ doscan = function(df,chr,Nfounders){
 
 ## 1. Create CVTK Conda env & Set-up the jupyter notebook env:
 
+<details>
+<summary>Click to expand code</summary>
+
 ````
 conda create -n cvtk python=3.7
 conda activate cvtk
@@ -2130,9 +2148,15 @@ python setup.py install
 
 ````
 
+</details>
+
 ## 2. Activate Jupyter Notebook:
 
+<details>
+<summary>Click to expand code</summary>
+
 ### In terminal
+
 ````
 pip install jupyter
 pip install notebook
@@ -2142,7 +2166,12 @@ jupyter notebook --no-browser
 # Now you should be connected to the conda env python.
 ````
 
+</details>
+
 ## 3. Install grenedalf & filter 2023 BCF file for E & S samples:
+
+<details>
+<summary>Click to expand code</summary>
 
 ````
 # === Setting up vcf data for .sync output === #
@@ -2168,6 +2197,11 @@ awk -F'\t' 'NR==FNR{samps[$1];next} FNR>1&&$1 in samps{print "samp="$1,"tpt="$4,
 bcftools view -S samples_final.txt bcftools_filtered-all.vcf.gz -Oz -o filtered_E_S.vcf.gz
 bcftools index filtered_E_S.vcf.gz
 
+````
+
+
+````
+
 # === Grenedalf === #
 git clone --recursive https://github.com/lczech/grenedalf.git
 cd grenedalf
@@ -2175,8 +2209,10 @@ make
 
 ls grenedalf/grenedalf/bin/
 ./grenedalf/grenedalf/bin/grenedalf --help
+
 ````
 
+</details>
 
 
 
