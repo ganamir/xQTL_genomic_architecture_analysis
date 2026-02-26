@@ -2116,6 +2116,32 @@ doscan = function(df,chr,Nfounders){
 <img width="1408" height="818" alt="image" src="https://github.com/user-attachments/assets/394cc365-759d-414b-b15f-eecd927082c2" />
 
 
+# Outdoor samples CVTK pipeline
+
+## 1. Create CVTK Conda env & Set-up the jupyter notebook env:
+
+````
+conda create -n cvtk python=3.7
+conda activate cvtk
+
+git clone https://github.com/vsbuffalo/cvtkpy.git
+cd cvtkpy
+python setup.py install
+
+````
+
+## 2. Activate Jupyter Notebook:
+
+### In terminal
+````
+pip install jupyter
+pip install notebook
+jupyter notebook --no-browser
+
+# In VSC; insert for existing kernel: http://localhost:8888/?token=84e2443fdd99d5c85071427b03de889ad49834cbcc11fef0 
+# Now you should be connected to the conda env python.
+````
+
 
 
 
