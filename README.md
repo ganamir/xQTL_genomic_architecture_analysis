@@ -389,6 +389,78 @@ done
 
 </details>
 
+## 8. Trimming Founders:
+
+<details>
+<summary>Click to expand code</summary>
+
+````
+
+#!/bin/bash
+# trim_founders.sh
+# Modified from pool-seq trim pipeline for founder FASTQs
+# Handles both paired-end and single-end files
+
+FASTQ_DIR="/mnt/d/xQTL_2025_Data/Final_Window_Analysis/DGRP_xQTL/DGRP_Founder_100/founder_fastqs"
+TRIM_DIR="/mnt/d/xQTL_2025_Data/Final_Window_Analysis/DGRP_xQTL/DGRP_Founder_100/trimmed_fastqs"
+
+mkdir -p "$TRIM_DIR"
+
+TOTAL=0
+PE=0
+SE=0
+
+# Process paired-end: files named SRR######_1.fastq.gz + SRR######_2.fastq.gz
+for R1 in "$FASTQ_DIR"/*_1.fastq.gz; do
+    [ -e "$R1" ] || continue
+    BASE=$(basename "$R1" _1.fastq.gz)
+    R2="$FASTQ_DIR/${BASE}_2.fastq.gz"
+
+    ((TOTAL++))
+
+    if [[ -f "$R2" ]]; then
+        echo "[$TOTAL] Trimming PE: $BASE"
+        trim_galore --paired --length 40 --max_n 1 -q 20 -j 8 \
+            -o "$TRIM_DIR" \
+            "$R1" "$R2"
+        ((PE++))
+    else
+        echo "[$TOTAL] Trimming SE: $BASE"
+        trim_galore --length 40 --max_n 1 -q 20 -j 8 \
+            -o "$TRIM_DIR" \
+            "$R1"
+        ((SE++))
+    fi
+done
+
+# Process single-end: files named SRR######.fastq.gz (no _1/_2)
+for FQ in "$FASTQ_DIR"/*.fastq.gz; do
+    [ -e "$FQ" ] || continue
+    BASE=$(basename "$FQ" .fastq.gz)
+    # Skip if it's a _1 or _2 file (already handled above)
+    [[ "$BASE" == *_1 ]] && continue
+    [[ "$BASE" == *_2 ]] && continue
+
+    ((TOTAL++))
+    echo "[$TOTAL] Trimming SE: $BASE"
+    trim_galore --length 40 --max_n 1 -q 20 -j 8 \
+        -o "$TRIM_DIR" \
+        "$FQ"
+    ((SE++))
+done
+
+echo ""
+echo "=== Summary ==="
+echo "Total: $TOTAL"
+echo "Paired-end: $PE"
+echo "Single-end: $SE"
+echo "Output: $TRIM_DIR"
+
+````
+
+</details>
+
+
 
 # DGRP & DSPR Processing Pipeline
 ## 1. Merge samples from different Lanes <<< DGRP ONLY!! >>> Skip to step 2 for DSPR
