@@ -420,13 +420,13 @@ for R1 in "$FASTQ_DIR"/*_1.fastq.gz; do
 
     if [[ -f "$R2" ]]; then
         echo "[$TOTAL] Trimming PE: $BASE"
-        trim_galore --paired --length 40 --max_n 1 -q 20 -j 8 \
+        trim_galore --paired --length 20 --max_n 1 -q 20 -j 8 \
             -o "$TRIM_DIR" \
             "$R1" "$R2"
         ((PE++))
     else
         echo "[$TOTAL] Trimming SE: $BASE"
-        trim_galore --length 40 --max_n 1 -q 20 -j 8 \
+        trim_galore --length 20 --max_n 1 -q 20 -j 8 \
             -o "$TRIM_DIR" \
             "$R1"
         ((SE++))
@@ -443,7 +443,7 @@ for FQ in "$FASTQ_DIR"/*.fastq.gz; do
 
     ((TOTAL++))
     echo "[$TOTAL] Trimming SE: $BASE"
-    trim_galore --length 40 --max_n 1 -q 20 -j 8 \
+    trim_galore --length 20 --max_n 1 -q 20 -j 8 \
         -o "$TRIM_DIR" \
         "$FQ"
     ((SE++))
