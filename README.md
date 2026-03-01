@@ -461,6 +461,117 @@ echo "Output: $TRIM_DIR"
 </details>
 
 
+## 9. Some founders replicate samples are bad quality, remove them & start alignemnt; 
+
+<details>
+<summary>Click to expand code</summary>
+
+````
+find trimmed_fastqs/ -name "*.fq.gz" -size -10k -exec ls -lh {} \;
+grep -v -E "SRR018598|SRR018599|SRR018602" srr_accessions.txt > srr_accessions_filtered.txt
+wc -l srr_accessions_filtered.txt
+````
+
+bwa mem
+````
+#!/bin/bash
+# align_founders.sh
+# BWA mem alignment for trimmed founder FASTQs
+# Handles both paired-end and single-end
+
+TRIM_DIR="/mnt/d/xQTL_2025_Data/Final_Window_Analysis/DGRP_xQTL/DGRP_Founder_100/trimmed_fastqs"
+BAM_DIR="/mnt/d/xQTL_2025_Data/Final_Window_Analysis/DGRP_xQTL/DGRP_Founder_100/aligned_bams"
+REF="/mnt/d/xQTL_2025_Data/ref/dm6.fa"
+THREADS=50
+
+mkdir -p "$BAM_DIR"
+
+# Skip known bad SRRs
+SKIP="SRR018598|SRR018599|SRR018602"
+
+TOTAL=0
+PE=0
+SE=0
+
+# ---- Paired-end: _1_val_1.fq.gz + _2_val_2.fq.gz ----
+for R1 in "$TRIM_DIR"/*_1_val_1.fq.gz; do
+    [ -e "$R1" ] || continue
+
+    BASE=$(basename "$R1" _1_val_1.fq.gz)
+
+    # Skip bad SRRs
+    if echo "$BASE" | grep -qE "$SKIP"; then
+        echo "Skipping bad SRR: $BASE"
+        continue
+    fi
+
+    R2="$TRIM_DIR/${BASE}_2_val_2.fq.gz"
+
+    if [[ ! -f "$R2" ]]; then
+        echo "WARNING: Missing R2 for $BASE, skipping"
+        continue
+    fi
+
+    # Skip if already aligned
+    if [[ -f "$BAM_DIR/${BASE}_aligned.bam" ]]; then
+        echo "Already aligned: $BASE"
+        continue
+    fi
+
+    ((TOTAL++))
+    ((PE++))
+    echo "[$TOTAL] Aligning PE: $BASE"
+
+    bwa mem "$REF" -M -t "$THREADS" -v 2 "$R1" "$R2" | \
+        samtools view -bS - | \
+        samtools sort -@ 8 -o "$BAM_DIR/${BASE}_aligned.bam"
+
+    samtools index "$BAM_DIR/${BASE}_aligned.bam"
+done
+
+# ---- Single-end: _trimmed.fq.gz or _1_trimmed.fq.gz ----
+for SE_FQ in "$TRIM_DIR"/*_trimmed.fq.gz; do
+    [ -e "$SE_FQ" ] || continue
+
+    BASE=$(basename "$SE_FQ" _trimmed.fq.gz)
+    # Remove trailing _1 if present
+    SRR=${BASE%_1}
+
+    # Skip bad SRRs
+    if echo "$SRR" | grep -qE "$SKIP"; then
+        echo "Skipping bad SRR: $SRR"
+        continue
+    fi
+
+    # Skip if already aligned
+    if [[ -f "$BAM_DIR/${SRR}_aligned.bam" ]]; then
+        echo "Already aligned: $SRR"
+        continue
+    fi
+
+    ((TOTAL++))
+    ((SE++))
+    echo "[$TOTAL] Aligning SE: $SRR"
+
+    bwa mem "$REF" -M -t "$THREADS" -v 2 "$SE_FQ" | \
+        samtools view -bS - | \
+        samtools sort -@ 8 -o "$BAM_DIR/${SRR}_aligned.bam"
+
+    samtools index "$BAM_DIR/${SRR}_aligned.bam"
+done
+
+echo ""
+echo "=== Summary ==="
+echo "Total aligned: $TOTAL"
+echo "Paired-end: $PE"
+echo "Single-end: $SE"
+echo "Output: $BAM_DIR"
+````
+
+
+
+</details>
+
 
 # DGRP & DSPR Processing Pipeline
 ## 1. Merge samples from different Lanes <<< DGRP ONLY!! >>> Skip to step 2 for DSPR
