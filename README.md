@@ -573,6 +573,125 @@ echo "Output: $BAM_DIR"
 </details>
 
 
+## 10. Dedup, add ReadGroups & Rename; 
+
+<details>
+<summary>Click to expand code</summary>
+
+````
+#!/bin/bash
+# merge_dedup_rg_founders.sh
+# For each DGRP line: merge SRR BAMs -> dedup -> add read groups (RGID = line number)
+
+set -euo pipefail
+
+BAM_DIR="/mnt/d/xQTL_2025_Data/Final_Window_Analysis/DGRP_xQTL/DGRP_Founder_100/aligned_bams"
+FINAL_DIR="/mnt/d/xQTL_2025_Data/Final_Window_Analysis/DGRP_xQTL/DGRP_Founder_100/final_bams"
+METADATA="/mnt/d/xQTL_2025_Data/Final_Window_Analysis/DGRP_xQTL/DGRP_Founder_100/my_100_founders_sra_metadata.csv"
+
+# Bad SRRs to skip
+SKIP="SRR018598|SRR018599|SRR018602"
+
+mkdir -p "$FINAL_DIR"
+
+# Build SRR -> line_num mapping
+python3 -c "
+import csv
+with open('$METADATA') as f:
+    reader = csv.DictReader(f)
+    for row in reader:
+        print(row['Run'], row['line_num'])
+" > /tmp/srr_to_line.tsv
+
+# Get unique line numbers
+cut -d' ' -f2 /tmp/srr_to_line.tsv | sort -n -u > /tmp/line_nums.txt
+
+echo "=== Merge + Dedup + ReadGroups ==="
+echo "Lines to process: $(wc -l < /tmp/line_nums.txt)"
+
+while read -r LINE_NUM; do
+    echo ""
+    echo "--- Line $LINE_NUM ---"
+
+    # Skip if already done
+    if [[ -f "$FINAL_DIR/DGRP_${LINE_NUM}.bam" ]]; then
+        echo "  Already complete, skipping"
+        continue
+    fi
+
+    # Find all SRRs for this line, excluding bad ones
+    SRRS=$(grep " ${LINE_NUM}$" /tmp/srr_to_line.tsv | cut -d' ' -f1 | grep -vE "$SKIP" || true)
+
+    if [[ -z "$SRRS" ]]; then
+        echo "  No valid SRRs, skipping"
+        continue
+    fi
+
+    # Collect BAM files
+    BAM_FILES=()
+    for srr in $SRRS; do
+        if [[ -f "$BAM_DIR/${srr}_aligned.bam" ]]; then
+            BAM_FILES+=("$BAM_DIR/${srr}_aligned.bam")
+        else
+            echo "  WARNING: Missing $srr"
+        fi
+    done
+
+    if [[ ${#BAM_FILES[@]} -eq 0 ]]; then
+        echo "  ERROR: No BAMs found, skipping"
+        continue
+    fi
+
+    echo "  BAMs: ${#BAM_FILES[@]}"
+
+    # ---- Merge (or copy if single) ----
+    MERGED="$FINAL_DIR/DGRP_${LINE_NUM}_merged.bam"
+    if [[ ${#BAM_FILES[@]} -eq 1 ]]; then
+        cp "${BAM_FILES[0]}" "$MERGED"
+    else
+        echo "  Merging..."
+        samtools merge -f "$MERGED" "${BAM_FILES[@]}"
+    fi
+
+    # ---- Dedup ----
+    echo "  Deduplicating..."
+    samtools sort -n -o "$FINAL_DIR/tmp_namesort.bam" "$MERGED"
+    samtools fixmate -m "$FINAL_DIR/tmp_namesort.bam" "$FINAL_DIR/tmp_fixmate.bam"
+    samtools sort -o "$FINAL_DIR/tmp_possort.bam" "$FINAL_DIR/tmp_fixmate.bam"
+    samtools markdup -r -s "$FINAL_DIR/tmp_possort.bam" "$FINAL_DIR/tmp_dedup.bam" \
+        2> "$FINAL_DIR/DGRP_${LINE_NUM}_dedup_stats.txt"
+
+    # ---- Add Read Groups ----
+    echo "  Adding read groups (RGID=$LINE_NUM)..."
+    picard AddOrReplaceReadGroups \
+        I="$FINAL_DIR/tmp_dedup.bam" \
+        O="$FINAL_DIR/DGRP_${LINE_NUM}.bam" \
+        SORT_ORDER=coordinate \
+        RGPL=illumina \
+        RGPU=DGRP \
+        RGLB=Lib1 \
+        RGID="$LINE_NUM" \
+        RGSM="$LINE_NUM" \
+        VALIDATION_STRINGENCY=LENIENT
+
+    samtools index "$FINAL_DIR/DGRP_${LINE_NUM}.bam"
+
+    # ---- Cleanup ----
+    rm -f "$MERGED" "$FINAL_DIR"/tmp_*.bam
+
+    echo "  Done: DGRP_${LINE_NUM}.bam"
+    samtools flagstat "$FINAL_DIR/DGRP_${LINE_NUM}.bam" | head -3
+
+done < /tmp/line_nums.txt
+
+echo ""
+echo "=== Complete ==="
+echo "Final BAMs: $(ls $FINAL_DIR/DGRP_*.bam 2>/dev/null | wc -l)"
+````
+
+</details>
+
+
 # DGRP & DSPR Processing Pipeline
 ## 1. Merge samples from different Lanes <<< DGRP ONLY!! >>> Skip to step 2 for DSPR
 
