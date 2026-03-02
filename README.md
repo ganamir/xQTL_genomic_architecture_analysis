@@ -2635,3 +2635,26 @@ bcftools index filtered_E_S_chr.vcf.gz
 
 </details>
 
+
+## 5. Jupyter notebook analysis:
+
+````
+!sed -i 's/sklearn/scikit-learn/' /mnt/d/xQTL_2025_Data/Final_Window_Analysis/OutdoorSample_CVTK/cvtkpy/setup.py
+!sed -i 's/panda$/pandas/' /mnt/d/xQTL_2025_Data/Final_Window_Analysis/OutdoorSample_CVTK/cvtkpy/setup.py
+!pip install /mnt/d/xQTL_2025_Data/Final_Window_Analysis/OutdoorSample_CVTK/cvtkpy/
+
+cd "/mnt/d/xQTL_2025_Data/Final_Window_Analysis/OutdoorSample_CVTK/input_files"
+
+````
+
+bash commands to clean up the sync file
+````
+gzip /mnt/d/xQTL_2025_Data/Final_Window_Analysis/OutdoorSample_CVTK/input_files/sync_file/sync.sync
+zcat /mnt/d/xQTL_2025_Data/Final_Window_Analysis/OutdoorSample_CVTK/input_files/sync_file/sync.sync.gz | tail -n +2 | gzip > /mnt/d/xQTL_2025_Data/Final_Window_Analysis/OutdoorSample_CVTK/input_files/sync_file/sync_noheader.sync.gz
+zcat /mnt/d/xQTL_2025_Data/Final_Window_Analysis/OutdoorSample_CVTK/input_files/sync_file/sync_noheader.sync.gz | sed 's/\.\:\.\:\.\:\.\:\.\:\./0:0:0:0:0:0/g' | gzip > /mnt/d/xQTL_2025_Data/Final_Window_Analysis/OutdoorSample_CVTK/input_files/sync_file/sync_clean.sync.gz
+````
+
+
+
+
+
