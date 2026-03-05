@@ -2027,6 +2027,18 @@ zcat /mnt/d/xQTL_2025_Data/Final_Window_Analysis/OutdoorSample_CVTK/input_files/
 zcat /mnt/d/xQTL_2025_Data/Final_Window_Analysis/OutdoorSample_CVTK/input_files/sync_file/sync_noheader.sync.gz | sed 's/\.\:\.\:\.\:\.\:\.\:\./0:0:0:0:0:0/g' | gzip > /mnt/d/xQTL_2025_Data/Final_Window_Analysis/OutdoorSample_CVTK/input_files/sync_file/sync_clean.sync.gz
 ````
 
+## Notes for changes to the CVTK pipeline for outdoor samples;
+
+1. We only have 3 founders; CVTK is expecting equal design across timepoints (9 E samples and 5 S samples)
+	- So we either sum/average depth values & average frequency values for the SNPs and create 1 compound founder that we align as a reference T0 to all the samples.
+    - So I settled on sum the depth values & average the frequency. Reason; given that the 3 founder pools are coming from the same population, fractional coverages generated from averaging make no biological sense. Rounding to whole numbers could be a solution, but seems wrong to do as its direct modification of the data.
+  
+2. TiledTemporalFreqs function; using the same tile range of 100kBP window size, the only thing changing is the input of data, now seperating data into E and S treatments and pairing all the timepoints together T0 > T1 > T2 > T3.
+	- Changing diploids from 1000 to 240 because we have pools of 120 individuals.
+
+WIP RETURN LATER & FINISH
+
+
 
 <img width="793" height="456" alt="image" src="https://github.com/user-attachments/assets/bbbd0a3b-2b0a-4c5b-bffc-9fddac4acdae" />
 
