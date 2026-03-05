@@ -2028,6 +2028,8 @@ zcat /mnt/d/xQTL_2025_Data/Final_Window_Analysis/OutdoorSample_CVTK/input_files/
 ````
 
 
+<img width="793" height="456" alt="image" src="https://github.com/user-attachments/assets/bbbd0a3b-2b0a-4c5b-bffc-9fddac4acdae" />
+
 
 
 
