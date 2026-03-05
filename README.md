@@ -40,19 +40,21 @@ echo "[INFO] Task $SLURM_ARRAY_TASK_ID: $DGRP - $ACC"
 # Download
 prefetch "$ACC" --output-directory "$SRA_DIR"
 
-# Extract
-fasterq-dump "$SRA_DIR/$ACC/$ACC.sra" \
+# Extract (use directory so fasterq-dump finds whatever SRR prefetch downloaded)
+fasterq-dump "$SRA_DIR/$ACC/" \
     --outdir "$FASTQ_DIR" \
     --threads 4 \
     --progress
 
-# Rename to include DGRP line
-for f in "$FASTQ_DIR"/${ACC}*.fastq; do
-    mv "$f" "${f/$ACC/$DGRP\_$ACC}"
+# Rename to include DGRP line (matches both SRX and SRR named files)
+for f in "$FASTQ_DIR"/${ACC}*.fastq "$FASTQ_DIR"/SRR*.fastq; do
+    [ -f "$f" ] || continue
+    base=$(basename "$f")
+    mv "$f" "$FASTQ_DIR/${DGRP}_${base}"
 done
 
-# Verify output exists, exit with error if not (triggers requeue)
-if ! ls "$FASTQ_DIR"/${DGRP}_${ACC}*.fastq 1>/dev/null 2>&1; then
+# Verify output exists, exit with error if not
+if ! ls "$FASTQ_DIR"/${DGRP}_*.fastq 1>/dev/null 2>&1; then
     echo "[FAILED] No fastq found for $DGRP - $ACC"
     exit 1
 fi
