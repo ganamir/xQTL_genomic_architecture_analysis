@@ -548,177 +548,69 @@ done
 
 </details>
 
-## 6. Create sample table info with bams
+# Processing xQTL samples through Haplotype Inferencing pipeline:
+
+## 1. Combine Founders & Samples:
+
+### First find RG names of the founders and input them into the haplotype.parameters.R file
 
 <details>
 <summary>Click to expand code</summary>
 
 ````
-#!/bin/bash
-# Usage: bash make_bam_list.sh /path/to/output_list.txt
-
-out_list=$1
-
-if [ -z "$out_list" ]; then
-    echo "Usage: $0 <output_list.txt>"
-    exit 1
-fi
-
-# Define your two BAM directories
-dir1="/mnt/d/xQTL_2025_Data/Final_Window_Analysis/DGRP_xQTL/Spino3/RG_groups"
-dir2="/mnt/d/grenepipe/gp_analysis/rudflies_2024/dedup"
-
-> "$out_list"
-
-for bam_dir in "$dir1" "$dir2"; do
-    if [ ! -d "$bam_dir" ]; then
-        echo "Warning: directory $bam_dir does not exist, skipping."
-        continue
-    fi
-    for bam in "$bam_dir"/*.bam; do
-        [ -e "$bam" ] || continue
-        realpath "$bam" >> "$out_list"
-    done
-    echo "Added BAMs from $bam_dir"
-done
-
-echo "BAM list written to $out_list"
+for bam in /mnt/d/xQTL_2025_Data/Final_Window_Analysis/DGRP_xQTL/DGRP_Founder_100/final_bams_RG/DGRP_*.bam; do
+    samtools view -H "$bam" | grep '^@RG' | grep -oP 'SM:\S+' | sed 's/SM://'
+done | sort -V | awk 'BEGIN{printf "c("} {printf sep"\""$0"\""; sep=","} END{print ")"}' \
+> /mnt/d/xQTL_2025_Data/Final_Window_Analysis/DGRP_xQTL/DGRP_Founder_100/founder_RG.txt
 ````
 
-</details>
-
-## 7. Combine Founders & Samples:
-
-<details>
-<summary>Click to expand code</summary>
-
-````
-# Download DGRP Lines here:
-# NCSU source, dm6, with DGRP-XXX sample names
-wget https://resources.aertslab.org/DGRP2/NCSU/final/dm6/DGRP2.source_NCSU.dm6.final.bcf
-wget https://resources.aertslab.org/DGRP2/NCSU/final/dm6/DGRP2.source_NCSU.dm6.final.bcf.csi
-````
-#Then create RefAlt Tables:
+# Then combine and create RefAlt Tables:
 
 ````
 #!/bin/bash
-# Usage: bash build_combined_refalt.sh bam_list.txt output_dir
-#
-# Generates one RefAlt file per chromosome with founder genotypes (binary)
-# and pool-seq read counts (AD) side by side.
-# Founder sites filtered to N_MISSING=0, biallelic SNPs only.
+#SBATCH --job-name=refalt
+#SBATCH --output=/mnt/d/xQTL_2025_Data/Final_Window_Analysis/DGRP_xQTL/Spino3/RG_groups/haplotype_inf_final/process/logs/refalt_%a.out
+#SBATCH --array=1-5
+#SBATCH --cpus-per-task=10
+#SBATCH --mem=20G
 
 ref="/mnt/d/xQTL_2025_Data/ref/dm6.fa"
-founder_bcf="/mnt/d/xQTL_2025_Data/Final_Window_Analysis/DGRP_xQTL/Spino3/RG_groups/founders_vcfs/my_100_founders.bcf"
-bams=$1
-output=$2
-mkdir -p "$output"
+bam_dir_founders="/mnt/d/xQTL_2025_Data/Final_Window_Analysis/DGRP_xQTL/DGRP_Founder_100/final_bams_RG"
+bam_dir_pool="/mnt/d/xQTL_2025_Data/Final_Window_Analysis/DGRP_xQTL/Spino3/RG_groups"
+output="/mnt/d/xQTL_2025_Data/Final_Window_Analysis/DGRP_xQTL/Spino3/RG_groups/haplotype_inf_final/process"
+mkdir -p "$output/logs"
 
-# --- Check and index BAMs if needed ---
-echo "=== Checking BAM indexes ==="
-while read -r bam; do
-    if [[ ! -f "${bam}.bai" ]]; then
-        echo "Indexing: $bam"
-        samtools index "$bam"
-    else
-        echo "Already indexed: $(basename $bam)"
-    fi
-done < "$bams"
-echo "=== Indexing complete ==="
+ls "$bam_dir_founders"/DGRP_*.bam "$bam_dir_pool"/{A,C}*.bam > /tmp/all_bams.txt
 
-# --- Chromosome name mapping: founder BCF uses 2L, BAMs use chr2L ---
-declare -A CHR_MAP
-CHR_MAP=( [chr2L]=2L [chr2R]=2R [chr3L]=3L [chr3R]=3R [chrX]=X )
+chrs=("chrX" "chr2L" "chr2R" "chr3L" "chr3R")
+mychr=${chrs[$((SLURM_ARRAY_TASK_ID - 1))]}
 
-declare -a chrs=("chrX" "chr2L" "chr2R" "chr3L" "chr3R")
+echo "Processing $mychr"
 
-run_chrom() {
-    mychr=$1
-    fchr=${CHR_MAP[$mychr]}
-    echo "Processing chromosome $mychr (founder: $fchr)"
+bcf_out="${output}/calls.${mychr}.bcf"
 
-    # Step 1: Extract filtered founder SNP positions
-    positions="${output}/positions.${mychr}.tsv"
-    bcftools view -m2 -M2 -v snps -r "$fchr" -i 'N_MISSING=0' "$founder_bcf" | \
-        bcftools query -f '%CHROM\t%POS\n' | \
-        awk -v chr="$mychr" '{print chr"\t"$2}' > "$positions"
-    n_sites=$(wc -l < "$positions")
-    echo "  Founder sites (N_MISSING=0): $n_sites"
+bcftools mpileup -I -d 1000 -r "$mychr" -a "FORMAT/AD,FORMAT/DP" -f "$ref" -b /tmp/all_bams.txt \
+    --threads 10 | \
+    bcftools call -mv -Ob -o "$bcf_out"
 
-    # Step 2: Extract founder genotypes (binary) keyed by POS
-    founder_tmp="${output}/tmp_founder.${mychr}.txt"
-    bcftools view -m2 -M2 -v snps -r "$fchr" -i 'N_MISSING=0' "$founder_bcf" | \
-        bcftools query -f '%POS[\t%GT]\n' | \
-        awk '{
-            printf "%s", $1
-            for(i=2; i<=NF; i++) {
-                if($i=="0/0" || $i=="0|0")
-                    printf "\t1\t0"
-                else if($i=="1/1" || $i=="1|1")
-                    printf "\t0\t1"
-                else
-                    printf "\tNA\tNA"
-            }
-            printf "\n"
-        }' | sort -k1,1n > "$founder_tmp"
-    echo "  Founder genotypes extracted: $(wc -l < "$founder_tmp") rows"
+bcftools index "$bcf_out"
 
-    # Step 3: mpileup pool BAMs at founder positions only
-    bcf_out="${output}/calls.${mychr}.bcf"
-    bcftools mpileup -I -d 1000 -r "$mychr" -T "$positions" -a "FORMAT/AD,FORMAT/DP" \
-        -f "$ref" -b "$bams" --threads 12 | \
-        bcftools call -mv --threads 12 -Ob -o "$bcf_out"
-    bcftools index "$bcf_out"
+echo -ne "CHROM\tPOS" > "${output}/RefAlt.${mychr}.txt"
+bcftools query -l "$bcf_out" | awk '{printf("\tREF_%s\tALT_%s",$1,$1)}' >> "${output}/RefAlt.${mychr}.txt"
+echo -ne "\n" >> "${output}/RefAlt.${mychr}.txt"
 
-    # Step 4: Extract pool AD counts keyed by POS
-    pool_tmp="${output}/tmp_pool.${mychr}.txt"
-    bcftools view -m2 -M2 -v snps -i 'QUAL>59' "$bcf_out" | \
-        bcftools query -f '%POS[\t%AD{0}\t%AD{1}]\n' | \
-        grep -v '\.' | sort -k1,1n > "$pool_tmp"
-    echo "  Pool SNPs called: $(wc -l < "$pool_tmp") rows"
+bcftools view -m2 -M2 -v snps -i 'QUAL>59' "$bcf_out" | \
+    bcftools query -f '%CHROM\t%POS[\t%AD{0}\t%AD{1}]\n' | \
+    grep -v '\.' >> "${output}/RefAlt.${mychr}.txt"
 
-    # Step 5: Build combined header
-    refalt="${output}/RefAlt.${mychr}.txt"
-    echo -ne "CHROM\tPOS" > "$refalt"
-    # Founder columns: REF_21 ALT_21 REF_26 ALT_26 ...
-    bcftools query -l "$founder_bcf" | while read -r s; do
-        num=$(echo "$s" | sed 's/DGRP-0*//')
-        echo -ne "\tREF_${num}\tALT_${num}"
-    done >> "$refalt"
-    # Pool columns: REF_A1 ALT_A1 REF_C1 ALT_C1 ...
-    bcftools query -l "$bcf_out" | awk '{printf("\tREF_%s\tALT_%s",$1,$1)}' >> "$refalt"
-    echo -ne "\n" >> "$refalt"
+echo "Finished $mychr"
 
-    # Step 6: Join founder + pool on POS, prepend CHROM
-    join -t$'\t' -1 1 -2 1 "$founder_tmp" "$pool_tmp" | \
-        awk -v chr="$mychr" 'BEGIN{OFS="\t"} {print chr, $0}' >> "$refalt"
-
-    n_combined=$(($(wc -l < "$refalt") - 1))
-    echo "  Combined RefAlt: $n_combined SNPs -> $refalt"
-
-    # Cleanup
-    rm -f "$founder_tmp" "$pool_tmp" "$positions"
-
-    echo "Finished chromosome $mychr"
-}
-
-export -f run_chrom
-export ref founder_bcf bams output
-
-# Run all chromosomes in parallel
-for mychr in "${chrs[@]}"; do
-    run_chrom "$mychr" &
-done
-wait
-
-echo "=== All chromosomes complete ==="
-ls -lh "$output"/RefAlt.*.txt
 ````
 
 
 </details>
 
-## 8.5. Debugging code for assesing h_cutoff, and various other problems associated with selecting options, such as wald test cut_off. 
+## 1.5. Debugging code for assesing h_cutoff, and various other problems associated with selecting options, such as wald test cut_off. 
 
 <details>
 <summary>Click to expand code</summary>
@@ -1442,11 +1334,11 @@ write.table(bb3, fileout)
 
 </details>
 
-Because we have ~226 DGRP founders, we need to make sure that hierachical clustering works properly and creates a proper amount of haplotype blocks (x>1).
+Because we have ~100 DGRP founders, we need to make sure that hierachical clustering works properly and creates a proper amount of haplotype blocks (x>1).
 
-Number of haplotypes has to stay biologically relevant, while not being overdiscriminatory (>100)
+Number of haplotypes has to stay biologically relevant, while not being overdiscriminatory (<100)
 
-## 9. Modify your input_table and haplotype.parameters files:
+## 2. Modify your input_table and haplotype.parameters files:
 haplotype.parameters
 
 <details>
@@ -1457,8 +1349,8 @@ haplotype.parameters
 # This file defines the parameters for haplotype estimation in the JUICE dataset
 
 # Founder samples (these should match the column names in your REFALT data)
-founders <- c("196","197","198","199","200","201","202","203","204","205","206","207","208","209","210","211","212","213","214","215","216","217","218","219","220","221","222","223","224","225","226","227","228","229","230","231","232","233","234","235","236","237","238","239","240","241","242","243","244","245","246","247","248","249","250","251","252","253","254","255","256","257","258","259","260","261","262","263","264","265","266","267","268","269","270","271","272","273","274","275","276","277","278","279","280","281","282","283","284","285","286","287","288","289","290","291","292","293","294","295","296","297","298","299","300","301","302","303","304","305","306","307","308","309","310","311","312","313","314","315","316","317","318","319","320","321","322","323","324","325","326","327","328","329","330","331","332","333","334","335","336","337","338","339","340","341","342","343","344","345","346","347","348","349","350","351","352","353","354","355","356","357","358","359","360","361","362","363","364","365","366","368","369","370","371","372","373","374","375","376","377","378","379","380","381","382","383","384","385","386","387","388","389","390","391","392","393","394","395","396","397","398","399","400","401","402","404","405","406","407","408","409","410","411","412","413","414","415","416","417","418","419","420","421","422","423")
-
+founders <- c("DGRP_21","DGRP_26","DGRP_31","DGRP_48","DGRP_69","DGRP_73","DGRP_83","DGRP_85","DGRP_88","DGRP_91","DGRP_100","DGRP_101","DGRP_105","DGRP_109","DGRP_129","DGRP_136","DGRP_142","DGRP_149","DGRP_153","DGRP_161","DGRP_176","DGRP_177","DGRP_181","DGRP_189","DGRP_217","DGRP_227","DGRP_228","DGRP_239","DGRP_287","DGRP_301","DGRP_306","DGRP_309","DGRP_310","DGRP_313","DGRP_315","DGRP_318","DGRP_321","DGRP_324","DGRP_332","DGRP_335","DGRP_338","DGRP_340","DGRP_350","DGRP_356","DGRP_359","DGRP_365","DGRP_370","DGRP_371","DGRP_373","DGRP_374","DGRP_375","DGRP_380","DGRP_381","DGRP_382","DGRP_385","DGRP_386","DGRP_390","DGRP_391","DGRP_399","DGRP_405","DGRP_406","DGRP_427","DGRP_437","DGRP_440","DGRP_441","DGRP_443","DGRP_502","DGRP_509","DGRP_513","DGRP_517","DGRP_535","DGRP_551","DGRP_559","DGRP_563","DGRP_566","DGRP_589","DGRP_634","DGRP_703","DGRP_705","DGRP_712","DGRP_732","DGRP_737","DGRP_748","DGRP_757","DGRP_776","DGRP_783","DGRP_786","DGRP_801","DGRP_804","DGRP_812","DGRP_819","DGRP_820","DGRP_821","DGRP_852","DGRP_857","DGRP_859","DGRP_861","DGRP_890","DGRP_900","DGRP_908")
+#founders <- readLines("founder_names.txt")
 # Step size for scanning positions along chromosome
 step <- 1000  # 10kb steps (increased from 5kb for speed)
 
@@ -1472,7 +1364,7 @@ size <- 50000  # Window size comes from command line parameter
 #try 100kb, 200kb, 300kb, 400kb, 500kb
 
 # Clustering parameters
-h_cutoff <- 1.5  # Default h_cutoff for fixed window hierarchical clustering | 1.5 for DGRP, 2.5 for DSPR |
+h_cutoff <- 2.5  # Default h_cutoff for fixed window hierarchical clustering
 
 # Samples to process (allows selecting subset from large REFALT files)
 names_in_bam=c("C1","C2","C3","C4","C5","C6","C7","C8","A1","A2","A3","A4","A5","A6","A7","A8")
@@ -1508,7 +1400,7 @@ input_table
 
 </details>
 
-## 10. Run REFALT2haps.Andreas.sh (for DGRP, running a modified REFALT2haps.Andreas.code.r, reference below!)
+## 3. Run REFALT2haps.Andreas.sh (for DGRP, running a modified REFALT2haps.Andreas.code.r, reference below!)
 Make sure that REFALT.chr . txt are located in the process folder
 ````
 sbatch REFALT2haps.Andreas.sh haplotype.parameters.R "process/
@@ -1522,7 +1414,7 @@ REFALT2haps.Andreas.code.r <<< This is the statistic side of the script
 
 CONCERNS!!!!! <<<< DGRP ONLY >>>>
 
-Founders data: really low coverage ~11x which creates a multitude of problems in REFALT2haps step.
+Founders data: really low coverage ~5-50x which creates a multitude of problems in REFALT2haps step.
 1. Code is expecting that all founders have at least 1 read for that specific SNP. Not the biggest contributor to a problem.
 
 2. Code is expecting homozygosity at every site, ALL founder samples have to be <0.03 or >0.97. Which is problematic in founder samples that are low coverage (DGRP RILs are ~11x coverage). Which leads to a lot of samples actually being non-homozygotic, i.e. somewhere between 0.03 and 0.97. Which gets filtered out (this is where most of the sites are getting filtered out)
@@ -1759,7 +1651,7 @@ cat("Output saved:", fileout, "\n")
 
 </details>
 
-## 11. Run haps2scan.Apr2025
+## 4. Run haps2scan.Apr2025
 ````
 sbatch haps2scan.Apr2025.sh input_table.txt "process/" "Spino3"
 
@@ -1884,6 +1776,9 @@ scan_functions
 Key modification Made:
 
 1. Wald.test3 now has eigenvalue filtering, with many founders being so similar to one another, haplotype contributions coming from all of them are small, therefore we filter values that are smaller than e-4. (Helps to minimize NAs calculated from overly complex matrix & removes uneeded data that wouldn't have helped with inferences. Some signal might be lost, but without filtering, no signal would even be generated.)
+
+NOTE: REVISIT AFTER FOUNDER REWORK!!!!!!!!!!!
+
 
 <details>
 <summary>Click to expand code</summary>
@@ -2144,9 +2039,6 @@ doscan = function(df,chr,Nfounders){
 
 </details>
 
-## LSEI vs GLM comparison
-<img width="1408" height="818" alt="image" src="https://github.com/user-attachments/assets/394cc365-759d-414b-b15f-eecd927082c2" />
-
 
 # Outdoor samples CVTK pipeline
 
@@ -2282,6 +2174,7 @@ zcat /mnt/d/xQTL_2025_Data/Final_Window_Analysis/OutdoorSample_CVTK/input_files/
 
 WIP RETURN LATER & FINISH
 
+WORK ON 2017 DATA
 
 
 <img width="793" height="456" alt="image" src="https://github.com/user-attachments/assets/bbbd0a3b-2b0a-4c5b-bffc-9fddac4acdae" />
