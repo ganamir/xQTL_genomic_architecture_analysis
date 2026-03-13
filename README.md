@@ -107,6 +107,208 @@ echo "[DONE] $DGRP - $ACC -> $SRR"
 </details>
 
 
+## 2. Trim files
+
+<details>
+<summary>Click to expand code</summary>
+
+````
+#!/bin/bash
+#SBATCH --job-name=trim_galore
+#SBATCH --output=logs/trim_%A_%a.out
+#SBATCH --error=logs/trim_%A_%a.err
+#SBATCH --array=1-100%5
+#SBATCH --cpus-per-task=8
+#SBATCH --mem=16G
+
+FASTQ_DIR="/mnt/d/xQTL_2025_Data/Final_Window_Analysis/DGRP_xQTL/DGRP_Founder_100/fastq_folder"
+TRIM_DIR="/mnt/d/xQTL_2025_Data/Final_Window_Analysis/DGRP_xQTL/DGRP_Founder_100/trimmed_fastqs"
+
+mkdir -p "$TRIM_DIR" logs
+
+DGRP=$(ls "$FASTQ_DIR"/DGRP_*.fastq | grep -oP 'DGRP_\d+' | sort -u | sed -n "${SLURM_ARRAY_TASK_ID}p")
+
+echo "[INFO] Task $SLURM_ARRAY_TASK_ID: $DGRP"
+
+# Skip if already trimmed
+if ls "$TRIM_DIR"/${DGRP}_*trimmed* 1>/dev/null 2>&1; then
+    echo "[SKIP] $DGRP already trimmed"
+    exit 0
+fi
+
+# Paired-end runs
+for R1 in "$FASTQ_DIR"/${DGRP}_*_1.fastq; do
+    [ -f "$R1" ] || continue
+    R2="${R1/_1.fastq/_2.fastq}"
+    if [[ -f "$R2" ]]; then
+        echo "[PE] Trimming $R1 + $R2"
+        trim_galore --paired --length 30 --max_n 1 -q 20 -j 8 \
+            -o "$TRIM_DIR" "$R1" "$R2"
+    fi
+done
+
+# Single-end runs
+for SE in "$FASTQ_DIR"/${DGRP}_*.fastq; do
+    [[ "$SE" == *_1.fastq ]] && continue
+    [[ "$SE" == *_2.fastq ]] && continue
+    echo "[SE] Trimming $SE"
+    trim_galore --length 30 --max_n 1 -q 20 -j 8 \
+        -o "$TRIM_DIR" "$SE"
+done
+
+echo "[DONE] $DGRP"
+
+
+````
+
+</details>
+
+## 3. BWA mem merge reads, sort, and output bams
+
+<details>
+<summary>Click to expand code</summary>
+
+````
+input_dir="/mnt/d/xQTL_2025_Data/Final_Window_Analysis/DGRP_xQTL/DGRP_Founder_100/trimmed_fastqs"
+output_dir="/mnt/d/xQTL_2025_Data/Final_Window_Analysis/DGRP_xQTL/DGRP_Founder_100/bams"
+mkdir -p "$output_dir"
+reference_genome="/mnt/d/xQTL_2025_Data/ref/dm6.fa"
+threads=50
+
+# --- Paired-end ---
+for file1 in "$input_dir"/DGRP_*_1_val_1.fq; do
+    [ -f "$file1" ] || continue
+    file2="${file1/_1_val_1.fq/_2_val_2.fq}"
+    if [ ! -f "$file2" ]; then
+        echo "R2 not found for $file1, skipping."
+        continue
+    fi
+
+    base=$(basename "$file1" _1_val_1.fq)
+    line_num=$(echo "$base" | cut -d_ -f2)
+    rg="@RG\tID:${line_num}\tSM:${base}\tPL:ILLUMINA"
+
+    temp_bam="$output_dir/${base}_temp_aligned.bam"
+    out_bam="$output_dir/${base}_aligned.bam"
+
+    echo "PE: $file1 + $file2"
+    bwa mem -M -t "$threads" -v 3 -R "$rg" "$reference_genome" "$file1" "$file2" \
+        | samtools view -bS - > "$temp_bam"
+    samtools sort "$temp_bam" -o "$out_bam"
+    samtools index "$out_bam"
+    rm "$temp_bam"
+done
+
+# --- Single-end ---
+for file1 in "$input_dir"/DGRP_*_trimmed.fq; do
+    [ -f "$file1" ] || continue
+
+    base=$(basename "$file1" _trimmed.fq)
+    line_num=$(echo "$base" | cut -d_ -f2)
+    rg="@RG\tID:${line_num}\tSM:${base}\tPL:ILLUMINA"
+
+    temp_bam="$output_dir/${base}_temp_aligned.bam"
+    out_bam="$output_dir/${base}_aligned.bam"
+
+    echo "SE: $file1"
+    bwa mem -M -t "$threads" -v 3 -R "$rg" "$reference_genome" "$file1" \
+        | samtools view -bS - > "$temp_bam"
+    samtools sort "$temp_bam" -o "$out_bam"
+    samtools index "$out_bam"
+    rm "$temp_bam"
+done
+
+````
+
+</details>
+
+## 4. Dedup & Merge
+<details>
+<summary>Click to expand code</summary>
+
+````
+#!/bin/bash
+bam_dir="/mnt/d/xQTL_2025_Data/Final_Window_Analysis/DGRP_xQTL/DGRP_Founder_100/bams"
+out_dir="/mnt/d/xQTL_2025_Data/Final_Window_Analysis/DGRP_xQTL/DGRP_Founder_100/final_bams"
+mkdir -p "$out_dir"
+
+# Get unique line numbers
+ls "$bam_dir"/*_aligned.bam | grep -oP 'DGRP_\d+' | sort -u | while read line; do
+    bams=("$bam_dir"/${line}_*_aligned.bam)
+    deduped_bams=()
+
+    # Dedup each SRR BAM separately
+    for bam in "${bams[@]}"; do
+        base=$(basename "$bam" .bam)
+        deduped="$out_dir/${base}_dedup.bam"
+        deduped_bams+=("$deduped")
+
+        samtools sort -n -o "$out_dir/${base}_namesorted.bam" "$bam"
+        samtools fixmate -m "$out_dir/${base}_namesorted.bam" "$out_dir/${base}_fixmate.bam"
+        samtools sort -o "$out_dir/${base}_positionsorted.bam" "$out_dir/${base}_fixmate.bam"
+        samtools markdup -r -s "$out_dir/${base}_positionsorted.bam" "$deduped" 2> "$out_dir/${base}_dedup_stats.txt"
+
+        rm "$out_dir/${base}_namesorted.bam" "$out_dir/${base}_fixmate.bam" "$out_dir/${base}_positionsorted.bam"
+    done
+
+    # Merge deduped BAMs per line
+    final="$out_dir/${line}.bam"
+    if [ "${#deduped_bams[@]}" -gt 1 ]; then
+        echo "Merging ${#deduped_bams[@]} deduped BAMs for $line"
+        samtools merge -f "$final" "${deduped_bams[@]}"
+        rm "${deduped_bams[@]}"
+    else
+        mv "${deduped_bams[0]}" "$final"
+    fi
+
+    samtools index "$final"
+    echo "Done: $final"
+done
+
+````
+
+</details>
+
+## 5. Add RG
+<details>
+<summary>Click to expand code</summary>
+
+````
+#!/bin/bash
+#SBATCH --job-name=add_RG
+#SBATCH --output=/mnt/d/xQTL_2025_Data/Final_Window_Analysis/DGRP_xQTL/DGRP_Founder_100/logs/RG_%a.out
+#SBATCH --array=1-100%20
+#SBATCH --cpus-per-task=1
+#SBATCH --mem=8G
+
+in_dir="/mnt/d/xQTL_2025_Data/Final_Window_Analysis/DGRP_xQTL/DGRP_Founder_100/final_bams"
+out_dir="/mnt/d/xQTL_2025_Data/Final_Window_Analysis/DGRP_xQTL/DGRP_Founder_100/final_bams_RG"
+mkdir -p "$out_dir"
+
+# Get the Nth BAM for this array task
+bam=$(ls "$in_dir"/DGRP_*.bam | sed -n "${SLURM_ARRAY_TASK_ID}p")
+line=$(basename "$bam" .bam)
+line_num=$(echo "$line" | cut -d_ -f2)
+
+picard AddOrReplaceReadGroups \
+    I="$bam" \
+    O="$out_dir/${line}.bam" \
+    RGID=${line_num} \
+    RGSM=DGRP_${line_num} \
+    RGPL=ILLUMINA \
+    RGPU=unit1 \
+    RGLB=Lib1 \
+    SORT_ORDER=coordinate \
+    VALIDATION_STRINGENCY=LENIENT
+
+samtools index "$out_dir/${line}.bam"
+echo "Done: $line"
+
+````
+
+</details>
+
+
 # DGRP & DSPR Processing Pipeline
 ## 1. Merge samples from different Lanes <<< DGRP ONLY!! >>> Skip to step 2 for DSPR
 
