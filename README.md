@@ -887,19 +887,7 @@ cat("Output saved:", fileout, "\n")
 # DEBUG HAPLOTYPEINF
 # =============================================================================
 
-chr2L <- read.table("process/Spino3/Spino3.pseudoscan.chr2R.txt")
-filt_chr2L <- na.omit(chr2L)
-
 design.df <- read.table("input_table.txt")
-
-library(tidyverse)
-library(limSolve)
-library(abind)
-
-filt_chr2L %>%
-  ggplot(aes(x = pos, y = Pseu_log10p)) + geom_point()
-
-
 
 #########
 # Functions
@@ -1329,12 +1317,11 @@ cat("Windows with invalid proportions:", bad_count, "out of", nrow(xx1), "\n")
 
 write.table(bb3, fileout)
 #write.table(bb4, fileout_meansBySample)
-
 ````
 
 </details>
 
-Because we have ~100 DGRP founders, we need to make sure that hierachical clustering works properly and creates a proper amount of haplotype blocks (x>1).
+Because we have ~100 DGRP founders, we need to make sure that adaptive hierachical clustering works properly and creates a proper amount of haplotype blocks (x>1).
 
 Number of haplotypes has to stay biologically relevant, while not being overdiscriminatory (<100)
 
@@ -1418,24 +1405,32 @@ Founders data: really low coverage ~5-50x which creates a multitude of problems 
 1. Code is expecting that all founders have at least 1 read for that specific SNP. Not the biggest contributor to a problem.
 
 2. Code is expecting homozygosity at every site, ALL founder samples have to be <0.03 or >0.97. Which is problematic in founder samples that are low coverage (DGRP RILs are ~11x coverage). Which leads to a lot of samples actually being non-homozygotic, i.e. somewhere between 0.03 and 0.97. Which gets filtered out (this is where most of the sites are getting filtered out)
-<img width="852" height="414" alt="image" src="https://github.com/user-attachments/assets/2851764b-e950-47bc-962c-54f9ad737f08" />
 
 3. Some sites are monomorphic between ALL founder samples (AF = 1, or AF = 0), which is bad for haplotype cluster estimation, how do you determine which haplotype it belongs to? So that get's filtered out.
 
-In the end, a ~500,000 SNP chr2L ends up with ~1621 SNPs across the entire genome post filtering.
-
+Above concerns are fixed with modified DGRP Scripts for DGRP xQTL dataset!
 
 ### Modified DGRP Scripts:
 REFALT2haps.Andreas.code.r
 Key modification Made:
 
-1. Binerization of Founder AF (frequencies >0.55 → 1, <0.45 → 0, ambiguous 0.45–0.55 → NA. This reflects the biological expectation that inbred lines should be homozygous.)
+1. Binerization of Founder AF (frequencies >0.55 → 1, <0.45 → 0, ambiguous 0.45–0.55 → NA. This reflects the biological expectation that inbred lines should be homozygous.) Some founder samples are poorly sequenced (coverage leaves a lot to be desired)
 
-2. Hierarchical clustering Cut off Testing & finding appropriate clustering distance (h_cutoff <- 1.5 DGRP | h_cutoff <- 2.5 DSPR)
+2. Adaptive Hierarchical clustering Cut off Testing & finding appropriate clustering distance (h_cutoff <- at 90th percentile for that window for DGRP | h_cutoff <- 2.5 DSPR)
 
-3. Added clustering of similar haplotypes (was not done in original xQTL Anthony Long pipeline), now clusters are calculated and grouped via h_cutoff (lower h_cutoff means smaller cut off to define dissimilarity (Less number of SNP different between founders))
+	Hierarchical clustering in the original script was doing essentially nothing. In the rework, due to an insane amount of haplotypes that we have with 100 founders, we are instead running lsei on haplotype clusters instead of individual founder haplotypes.
+	Script automatically clusters groups per window via adaptive h_cutoff which uses a 90th pecentile. Calculated manually, 90th percentile roughly yields the 6-10 unique haplotype groups per window, similar to DSPR with its 8 founders.
+	Done via:
+````
+  d_mat      <- dist(t(f_mat))
+  h_adaptive <- quantile(as.vector(d_mat), 0.90)
+  Groups     <- cutree(hclust(d_mat), h = h_adaptive)
+  cat(sprintf("SNPs after complete.cases: %d, n_groups: %d, h_p90: %.2f, max_dist: %.2f\n", 
+              nrow(f_mat), length(unique(Groups)), h_adaptive, max(d_mat)))
 
-4. Clustering occurs before lsei runs, removes calculations errors associated with complex matrix with large number of founder samples (that are very similar to one another across the entire window)
+````
+
+3. Clustering occurs before lsei runs, removes calculations errors associated with complex matrix with large number of founder samples (that are very similar to one another across the entire window)
 
 <details>
 <summary>Click to expand code</summary>
@@ -1456,7 +1451,6 @@ est_hap <- function(spotsdf, df_wide) {
   founder_cols <- chunk %>% select(all_of(founders))
   pool_names   <- intersect(names_in_bam, names(chunk))
   
-  # Cluster once using founder data only (shared across all samples)
   f_mat <- as.matrix(founder_cols[complete.cases(founder_cols), ])
   if (nrow(f_mat) < 10 | ncol(f_mat) < 2) {
     return(tibble(
@@ -1465,7 +1459,12 @@ est_hap <- function(spotsdf, df_wide) {
       Err = list(NA), Names = list(NA)
     ))
   }
-  Groups <- cutree(hclust(dist(t(f_mat))), h = h_cutoff)
+  
+  d_mat      <- dist(t(f_mat))
+  h_adaptive <- quantile(as.vector(d_mat), 0.90)
+  Groups     <- cutree(hclust(d_mat), h = h_adaptive)
+  cat(sprintf("SNPs after complete.cases: %d, n_groups: %d, h_p90: %.2f, max_dist: %.2f\n", 
+              nrow(f_mat), length(unique(Groups)), h_adaptive, max(d_mat)))
   
   results <- lapply(pool_names, function(samp) {
     sampdf <- data.frame(freq = chunk[[samp]], founder_cols)
@@ -1484,45 +1483,34 @@ est_hap <- function(spotsdf, df_wide) {
 # Estimate haplotype proportions for a single sample via lsei
 # sampdf has columns: freq (pool), then one column per founder
 est_hap2 <- function(sampdf, Groups) {
-  founder_mat   <- sampdf %>% select(-freq)
-  Y             <- sampdf$freq
+  founder_mat <- sampdf %>% select(-freq)
+  Y           <- sampdf$freq
   
-  good          <- !is.na(Y) & complete.cases(founder_mat)
-  Y             <- Y[good]
-  founder_mat   <- founder_mat[good, ]
-  m_founder_mat <- as.matrix(founder_mat)
+  good        <- !is.na(Y) & complete.cases(founder_mat)
+  Y           <- Y[good]
+  founder_mat <- as.matrix(founder_mat[good, ])
   
-  if (nrow(m_founder_mat) < 10 | ncol(m_founder_mat) < 2) {
+  if (nrow(founder_mat) < 10 | ncol(founder_mat) < 2) {
     return(list(Groups = NA, Haps = NA, Err = NA, Names = NA))
   }
   
-  # Collapse founder matrix into cluster-level matrix BEFORE lsei
   unique_groups <- sort(unique(Groups))
   n_groups      <- length(unique_groups)
+  group_names   <- paste0("G", unique_groups)
   
-  cluster_mat <- sapply(unique_groups, function(cl) {
-    members <- which(Groups == cl)
-    if (length(members) == 1) {
-      m_founder_mat[, members]
-    } else {
-      rowMeans(m_founder_mat[, members])
-    }
-  })
-  
-  d <- ncol(cluster_mat)
-  
-  if (d < 2) {
-    return(list(Groups = NA, Haps = NA, Err = NA, Names = NA))
-  }
+  # Collapse founders to group means BEFORE solving
+  A_collapsed <- do.call(cbind, lapply(unique_groups, function(g) {
+    rowMeans(founder_mat[, which(Groups == g), drop = FALSE])
+  }))
+  colnames(A_collapsed) <- group_names
   
   out <- lsei(
-    A = cluster_mat, B = Y,
-    E = t(matrix(rep(1, d))), F = 1,
-    G = diag(d), H = matrix(rep(0.0003, d)),
+    A = A_collapsed, B = Y,
+    E = t(matrix(rep(1, n_groups))), F = 1,
+    G = diag(n_groups), H = rep(0, n_groups),
     verbose = FALSE, fulloutput = TRUE
   )
   
-  group_names <- paste0("G", unique_groups)
   names(out$X) <- group_names
   
   list(
@@ -1669,8 +1657,7 @@ haps2scan.Apr2025.code
 Key modification Made:
 
 1. doscan2 works with NAs that are introduced in complex matrix calculations
-
-2. Commented out founder contribution dataset. Due to clustering of haplotypes, we no longer are able to identify which founder set contributed to the window, which is fine for DGRP data.
+2. Modifications to how clustering is fed into calculations. Considering that we are using adaptive haplotype clustering, different number of founder clusters are calculated per window, so new code accounts for that.
 
 <details>
 <summary>Click to expand code</summary>
@@ -1767,6 +1754,7 @@ bb3 = add_genetic(bb2)
 write.table(bb3, fileout)
 #write.table(bb4, fileout_meansBySample)
 
+
 ````
 
 </details>
@@ -1775,9 +1763,17 @@ write.table(bb3, fileout)
 scan_functions
 Key modification Made:
 
-1. Wald.test3 now has eigenvalue filtering, with many founders being so similar to one another, haplotype contributions coming from all of them are small, therefore we filter values that are smaller than e-4. (Helps to minimize NAs calculated from overly complex matrix & removes uneeded data that wouldn't have helped with inferences. Some signal might be lost, but without filtering, no signal would even be generated.)
+1. Commented out founder contribution dataset. Due to clustering of haplotypes, we no longer are able to identify which founder set contributed to the window, which is fine for DGRP data.
 
-NOTE: REVISIT AFTER FOUNDER REWORK!!!!!!!!!!!
+2. Due to some inversion regions in the DGRPs (or maybe some other reason?), some regions in founders are extremely distinct from one another. If a region is highly distinct, where haplotype clustering is not working, we are implementing a contribution cutoff via:
+	Where eigenvalues that are super small for that particular window are filtered out. This is because making inferences on the contribution so small is extremely difficult, and penalizes the dataset beyond what we are interested in. This is a secondary filter, to catch any hopefully small problems that might remain if haplotype clustering with h_cutoff didn't work properly. 
+
+````
+  df = length(p1)-1
+  covar = covar1+covar2
+  eg <- eigen(covar)
+  keep <- eg$values[1:df] > 1e-5
+````
 
 
 <details>
@@ -1806,66 +1802,49 @@ average_variance <- function(cov_matrix, tolerance = 1e-10) {
 }
 
 wald.test3 = function(p1,p2,covar1,covar2,nrepl=1,N1=NA,N2=NA){
-    
-    # Wald test for multinomial frequencies
-    # if nrepl = 1: (one replicate, analogous to chi square):
-    #  p1 and p2 are vectors of relative frequencies to be compared
-    # covar1 and covar2 are the reconstruction error 
-    # covariance matrices from limSolve
-    # the sampling covariance matrices are generated within limSolve
-    # if nrepl > 1 (multiple replicates, analogous to CMH):
-    #   p1 and p2 are matrices, each row is frequency vector for one replicate
-    # covar1 and covar2 are tensors (3-dimensional arrays, third dimension 
-    #  denotes replicate) for the linSolve covariance matrices
-    # N1 (initial) and N2 (after treatment) 
-    # are sample sizes, they are vectors when there is more than one replicate
-    # N1[i], N2[i] are then for replicate i
-    if (nrepl>1){
-      N1.eff=rep(NA,nrepl)
-      N2.eff=rep(NA,nrepl)
-      lp1 = length(p1[1,])
-      cv1=array(NA,c(lp1,lp1,nrepl))
-      cv2=array(NA,c(lp1,lp1,nrepl))
-      for (i in 1:nrepl){
-          
-        covmat1  = mn.covmat((N1[i]*p1[i,]+N2[i]*p2[i,])/(N1[i]+N2[i]),2*N1[i])
-        covmat2  = mn.covmat((N1[i]*p1[i,]+N2[i]*p2[i,])/(N1[i]+N2[i]),2*N2[i])
-    
-        N1.eff[i] = sum(diag(covmat1))*4*N1[i]^2/(sum(diag(covmat1))*2*N1[i]+2*N1[i]*sum(diag(covar1[,,i])) )
-        N2.eff[i] = sum(diag(covmat2))*4*N2[i]^2/(sum(diag(covmat2))*2*N2[i]+2*N2[i]*sum(diag(covar2[,,i])) )
-        cv1[,,i]= (covmat1 + covar1[ , ,i])  * (N1.eff[i])^2
-        cv2[,,i]= (covmat2 + covar2[ , ,i])  * (N2.eff[i])^2
-        
-      }
-        
-      p1 = N1.eff %*% p1 / sum(N1.eff)
-      p2 = N2.eff %*% p2 / sum(N2.eff)
-     
-      covar1= rowSums(cv1, dims = 2) / sum(N1.eff)^2
-      covar2= rowSums(cv2, dims = 2) / sum(N2.eff)^2
-     # browser()
+  if (nrepl>1){
+    N1.eff=rep(NA,nrepl)
+    N2.eff=rep(NA,nrepl)
+    lp1 = length(p1[1,])
+    cv1=array(NA,c(lp1,lp1,nrepl))
+    cv2=array(NA,c(lp1,lp1,nrepl))
+    for (i in 1:nrepl){
+      covmat1  = mn.covmat((N1[i]*p1[i,]+N2[i]*p2[i,])/(N1[i]+N2[i]),2*N1[i])
+      covmat2  = mn.covmat((N1[i]*p1[i,]+N2[i]*p2[i,])/(N1[i]+N2[i]),2*N2[i])
+      N1.eff[i] = sum(diag(covmat1))*4*N1[i]^2/(sum(diag(covmat1))*2*N1[i]+2*N1[i]*sum(diag(covar1[,,i])))
+      N2.eff[i] = sum(diag(covmat2))*4*N2[i]^2/(sum(diag(covmat2))*2*N2[i]+2*N2[i]*sum(diag(covar2[,,i])))
+      cv1[,,i]= (covmat1 + covar1[,,i]) * (N1.eff[i])^2
+      cv2[,,i]= (covmat2 + covar2[,,i]) * (N2.eff[i])^2
     }
-    else {
-      covmat1  = mn.covmat((N1*p1+N2*p2)/(N1+N2),2*N1)
-      covmat2  = mn.covmat((N1*p1+N2*p2)/(N1+N2),2*N2)
-      covar1 = covar1 + covmat1
-      covar2 = covar2 + covmat2
-    }
+    p1 = N1.eff %*% p1 / sum(N1.eff)
+    p2 = N2.eff %*% p2 / sum(N2.eff)
+    covar1= rowSums(cv1, dims=2) / sum(N1.eff)^2
+    covar2= rowSums(cv2, dims=2) / sum(N2.eff)^2
+  } else {
+    covmat1 = mn.covmat((N1*p1+N2*p2)/(N1+N2),2*N1)
+    covmat2 = mn.covmat((N1*p1+N2*p2)/(N1+N2),2*N2)
+    covar1 = covar1 + covmat1
+    covar2 = covar2 + covmat2
+  }
   
   df = length(p1)-1
-  covar=covar1+covar2
+  covar = covar1+covar2
   eg <- eigen(covar)
-  # remove last eigenvector which corresponds to eigenvalue zero
-  keep <- eg$values[1:df] > 1e-4  # threshold for meaningful eigenvalues
-  ev <- eg$vectors[,1:df][,keep]
+  keep <- eg$values[1:df] > 1e-5
+  
+  if (sum(keep) == 0) {
+    cat("WARNING: all eigenvalues below threshold\n")
+    cat("eigenvalues:", signif(eg$values[1:df], 4), "\n")
+    return(list(wald.test=NA, p.value=NA, avg.var=average_variance(covar)$avg_var))
+  }
+  
+  ev   <- eg$vectors[, 1:df, drop=FALSE][, keep, drop=FALSE]
   eval <- eg$values[1:df][keep]
-  df <- sum(keep)  # adjust degrees of freedom
-  trafo<-diag(1/sqrt(eval)) %*% t(ev) 
-  # set extremely small values to zero
-  #new.covar[new.covar < 10^-9]=0
-  p1= as.vector(p1); p2=as.vector(p2)
-  tstat <- sum((trafo %*% (p1 - p2))^2)
-  pval<- exp(pchisq(tstat,df,lower.tail=FALSE,log.p=TRUE))
+  df   <- sum(keep)
+  trafo <- diag(1/sqrt(eval), nrow=length(eval)) %*% t(ev)
+  p1 = as.vector(p1); p2 = as.vector(p2)
+  tstat <- sum((trafo %*% (p1-p2))^2)
+  pval  <- exp(pchisq(tstat, df, lower.tail=FALSE, log.p=TRUE))
   list(wald.test=tstat, p.value=pval, avg.var=average_variance(covar)$avg_var)
 }
 
@@ -2034,7 +2013,6 @@ doscan = function(df,chr,Nfounders){
   ll
 }
 
-
 ````
 
 </details>
@@ -2163,21 +2141,8 @@ zcat /mnt/d/xQTL_2025_Data/Final_Window_Analysis/OutdoorSample_CVTK/input_files/
 zcat /mnt/d/xQTL_2025_Data/Final_Window_Analysis/OutdoorSample_CVTK/input_files/sync_file/sync_noheader.sync.gz | sed 's/\.\:\.\:\.\:\.\:\.\:\./0:0:0:0:0:0/g' | gzip > /mnt/d/xQTL_2025_Data/Final_Window_Analysis/OutdoorSample_CVTK/input_files/sync_file/sync_clean.sync.gz
 ````
 
-## Notes for changes to the CVTK pipeline for outdoor samples;
+### Refer to xQTL_outdoor.ipynb for the CVTK pipeline itself. 
 
-1. We only have 3 founders; CVTK is expecting equal design across timepoints (9 E samples and 5 S samples)
-	- So we either sum/average depth values & average frequency values for the SNPs and create 1 compound founder that we align as a reference T0 to all the samples.
-    - So I settled on sum the depth values & average the frequency. Reason; given that the 3 founder pools are coming from the same population, fractional coverages generated from averaging make no biological sense. Rounding to whole numbers could be a solution, but seems wrong to do as its direct modification of the data.
-  
-2. TiledTemporalFreqs function; using the same tile range of 100kBP window size, the only thing changing is the input of data, now seperating data into E and S treatments and pairing all the timepoints together T0 > T1 > T2 > T3.
-	- Changing diploids from 1000 to 240 because we have pools of 120 individuals.
-
-WIP RETURN LATER & FINISH
-
-WORK ON 2017 DATA
-
-
-<img width="793" height="456" alt="image" src="https://github.com/user-attachments/assets/bbbd0a3b-2b0a-4c5b-bffc-9fddac4acdae" />
 
 
 
